@@ -7,6 +7,7 @@ import { missionEngine } from '../../services/missionEngine';
 import { CameraVisionHUD } from './CameraVisionHUD';
 import { QRResultCard } from './QRResultCard';
 import { PixhawkMonitor } from './PixhawkMonitor';
+import { PixhawkConnectionCard } from './PixhawkConnectionCard';
 import { MissionTimer } from '../common/MissionTimer';
 import { 
   Play, 
@@ -64,8 +65,6 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
   const [showArmConfirmModal, setShowArmConfirmModal] = useState(false);
   const [showPhoneOtgHelp, setShowPhoneOtgHelp] = useState(false);
   const [preArmError, setPreArmError] = useState<string | null>(null);
-  const [selectedBaud, setSelectedBaud] = useState<number>(115200);
-  const [isConnecting, setIsConnecting] = useState(false);
 
   const isScanning = missionState === 'SEARCHING' || missionState === 'QR_DETECTED' || missionState === 'QR_SCANNING';
 
@@ -82,26 +81,6 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
     isMissionAborted ? 'Aborted' :
     isMissionRunning ? 'Running' :
     'Ready / Standby';
-
-  const handleConnectUsb = async () => {
-    setIsConnecting(true);
-    try {
-      const ok = await mavlinkService.connectWebSerial(selectedBaud);
-      if (!ok) {
-        // If connection failed on phone, show OTG guidance modal
-        setShowPhoneOtgHelp(true);
-      }
-    } catch (e) {
-      console.warn('Connect error', e);
-      setShowPhoneOtgHelp(true);
-    } finally {
-      setIsConnecting(false);
-    }
-  };
-
-  const handleDisconnectUsb = async () => {
-    await mavlinkService.disconnectSerial();
-  };
 
   const handleArmAndLaunchClick = () => {
     const safety = mavlinkService.evaluatePreArmSafety();
@@ -127,102 +106,11 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
 
   return (
     <div className="space-y-4 font-mono select-none">
-      {/* 1. REAL HARDWARE USB-OTG CONNECTION ACTION BAR */}
-      <div className="bg-slate-900/95 border-2 border-slate-700/80 rounded-xl p-3 sm:p-4 shadow-xl flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center space-x-3">
-          <div className={`p-2.5 rounded-lg ${pixhawkState.isConnected ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/50' : 'bg-rose-950 text-rose-400 border border-rose-500/50'}`}>
-            <Usb className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="flex items-center space-x-2">
-              <span className="text-xs font-black uppercase text-white tracking-wider">PIXHAWK 2.4.8 USB-OTG LINK:</span>
-              <span className={`text-[11px] font-bold px-2 py-0.5 rounded ${pixhawkState.isConnected ? 'bg-emerald-900/80 text-emerald-300' : 'bg-rose-900/80 text-rose-300'}`}>
-                {pixhawkState.isConnected ? (pixhawkState.isRealHardware ? 'HARDWARE LIVE ✓' : 'SITL SIMULATED') : 'DISCONNECTED'}
-              </span>
-
-              {/* Top Battery Status Pill */}
-              {pixhawkState.isConnected && (
-                <span className={`text-[11px] font-black px-2.5 py-0.5 rounded-full border flex items-center space-x-1 ${
-                  telemetry.batteryPercent > 50 
-                    ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-300' 
-                    : telemetry.batteryPercent > 20 
-                    ? 'bg-amber-950/80 border-amber-500/50 text-amber-300' 
-                    : 'bg-rose-950/80 border-rose-500/50 text-rose-300 animate-pulse'
-                }`}>
-                  <Battery className="w-3 h-3" />
-                  <span>{telemetry.batteryPercent}% ({telemetry.batteryVoltage}V)</span>
-                </span>
-              )}
-            </div>
-            <div className="text-[11px] text-slate-400 truncate max-w-md">
-              {pixhawkState.portOrAddress}
-            </div>
-          </div>
-        </div>
-
-        {/* Connect / Disconnect / Baud Controls */}
-        <div className="flex items-center space-x-2">
-          {!pixhawkState.isConnected ? (
-            <>
-              <select
-                value={selectedBaud}
-                onChange={(e) => setSelectedBaud(Number(e.target.value))}
-                className="bg-slate-950 text-slate-200 text-xs px-2.5 py-2 rounded-lg border border-slate-700 cursor-pointer"
-              >
-                <option value={115200}>115200 (Direct USB OTG / UART)</option>
-                <option value={57600}>57600 (TELEM1 / 3DR Radio)</option>
-                <option value={921600}>921600 (High-Speed Serial)</option>
-              </select>
-
-              <button
-                onClick={handleConnectUsb}
-                disabled={isConnecting}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white rounded-lg text-xs font-black tracking-wide uppercase transition flex items-center space-x-1.5 shadow-lg shadow-emerald-600/30 cursor-pointer"
-              >
-                <Usb className="w-4 h-4" />
-                <span>{isConnecting ? 'Connecting...' : 'CONNECT PHONE OTG'}</span>
-              </button>
-
-              <button
-                onClick={() => setShowPhoneOtgHelp(true)}
-                className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-amber-300 rounded-lg text-xs font-bold transition flex items-center space-x-1 border border-slate-700 cursor-pointer"
-                title="How to connect phone to Pixhawk UART"
-              >
-                <HelpCircle className="w-4 h-4" />
-                <span className="hidden sm:inline">OTG Guide</span>
-              </button>
-
-              <button
-                onClick={() => mavlinkService.switchToSimulationMode()}
-                className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-bold transition cursor-pointer"
-                title="Switch to Bench Test Simulation"
-              >
-                Bench Test
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                onClick={handleDisconnectUsb}
-                className="px-3 py-2 bg-rose-950/80 hover:bg-rose-900 border border-rose-600 text-rose-300 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 cursor-pointer"
-              >
-                <PowerOff className="w-4 h-4" />
-                <span>DISCONNECT</span>
-              </button>
-
-              {!pixhawkState.isRealHardware && (
-                <button
-                  onClick={handleConnectUsb}
-                  className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition flex items-center space-x-1 cursor-pointer"
-                >
-                  <Usb className="w-4 h-4" />
-                  <span>CONNECT HARDWARE</span>
-                </button>
-              )}
-            </>
-          )}
-        </div>
-      </div>
+      {/* 1. AUTOMATIC USB-OTG CONNECTION CARD WITH STATE MACHINE & DIAGNOSTICS */}
+      <PixhawkConnectionCard
+        connectionState={pixhawkState}
+        onOpenHelp={() => setShowPhoneOtgHelp(true)}
+      />
 
       {/* 2. Top Bar: Official Mission Timer & Primary Emergency Actions */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
@@ -498,7 +386,7 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
               <button
                 onClick={async () => {
                   setShowPhoneOtgHelp(false);
-                  await handleConnectUsb();
+                  await mavlinkService.connectHardware();
                 }}
                 className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs rounded-xl transition flex items-center justify-center space-x-1.5 shadow-lg shadow-emerald-600/30 cursor-pointer"
               >

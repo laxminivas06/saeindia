@@ -8,6 +8,7 @@ import { StatusBadge } from '../common/StatusBadge';
 import { HomePointSetter } from './HomePointSetter';
 import { PreFlightChecklist } from './PreFlightChecklist';
 import { TacticalMap } from './TacticalMap';
+import { PixhawkConnectionCard } from '../Drone/PixhawkConnectionCard';
 import { 
   Play, 
   RotateCcw, 
@@ -60,6 +61,9 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
 
   return (
     <div className="p-3 sm:p-5 max-w-7xl mx-auto space-y-4 sm:space-y-5 font-mono">
+      {/* Top Pixhawk USB-OTG Connection Card */}
+      <PixhawkConnectionCard connectionState={pixhawkState} />
+
       {/* Top Banner: Drone Status Indicator & Mission State */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900/90 p-3 sm:p-4 rounded-xl border border-slate-800 hud-border">
         <div className="space-y-1">
