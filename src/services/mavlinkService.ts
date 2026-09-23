@@ -5,9 +5,11 @@ import {
   FlightControllerConnection,
   PixhawkStatusMessage,
   ConnectionPhase,
-  UsbDeviceDiagnostics
+  UsbDeviceDiagnostics,
+  DiagnosticsLogEntry
 } from '../types/mavlink';
 import { usbHostService } from './usbHostService';
+import { transportManager } from './transports/TransportManager';
 
 type TelemetryListener = (telemetry: DroneTelemetry) => void;
 type MAVLinkPacketListener = (packet: MAVLinkPacket) => void;
@@ -56,11 +58,23 @@ const VEHICLE_TYPE_NAMES: Record<number, string> = {
   2: 'QUADROTOR',
   3: 'COAXIAL',
   4: 'HELICOPTER',
+  5: 'ANTENNA_TRACKER',
+  6: 'GCS',
+  7: 'AIRSHIP',
+  8: 'FREE_BALLOON',
+  9: 'ROCKET',
   10: 'GROUND_ROVER',
+  11: 'SURFACE_BOAT',
   12: 'SUBMARINE',
   13: 'HEXAROTOR',
   14: 'OCTOROTOR',
-  15: 'TRICOPTER'
+  15: 'TRICOPTER',
+  16: 'FLAPPING_WING',
+  17: 'KITE',
+  18: 'ONBOARD_CONTROLLER',
+  19: 'VTOL_DUOROTOR',
+  20: 'VTOL_QUADROTOR',
+  21: 'VTOL_TILTROTOR'
 };
 
 const SEVERITY_NAMES: Array<PixhawkStatusMessage['severity']> = [
@@ -80,9 +94,11 @@ class MAVLinkService {
   private connectionListeners: Set<ConnectionStateListener> = new Set();
 
   private connectionState: PixhawkConnectionState = {
-    connectionType: 'SIMULATED',
+    connectionType: 'USB_SERIAL',
     phase: 'DISCONNECTED',
+    phaseMessage: 'Ready for Pixhawk USB OTG auto-detection',
     isConnected: false,
+    isUsbConnected: false,
     portOrAddress: 'Disconnected',
     baudRate: 115200,
     bytesReceived: 0,
@@ -92,16 +108,18 @@ class MAVLinkService {
     packetLossPercent: 0,
     firmwareVersion: 'Pixhawk 2.4.8 (ArduCopter / PX4)',
     autopilotType: 'MAV_AUTOPILOT_ARDUPILOT',
-    mavlinkVersion: 'MAVLink 2.4.8',
+    mavlinkVersion: 'MAVLink 2.0 / 1.0',
     isReceivingTelemetry: false,
     ekfHealthy: true,
     preArmChecksPassed: false,
     statusHistory: [],
+    diagnosticsLogs: [],
     isRealHardware: false,
     diagnostics: {
       totalPacketsReceived: 0,
       heartbeatsCount: 0,
-      driverType: 'NATIVE_ANDROID_USB'
+      driverType: 'NATIVE_ANDROID_USB',
+      hostPowerStatus: 'HOST_ACTIVE'
     }
   };
 
@@ -147,9 +165,11 @@ class MAVLinkService {
   private rxBufferLen: number = 0;
   private sendSeq: number = 0;
 
-  // Heartbeat Rate Monitoring
+  // Heartbeat Rate Monitoring & Timeout Tracking
   private heartbeatTimestamps: number[] = [];
   private heartbeatWatchdogTimer: any = null;
+  private heartbeatWaitingTimer: any = null;
+  private heartbeatWaitStartTime: number = 0;
 
   // Simulator Interval (Only active when in SIMULATED mode)
   private simInterval: any = null;
@@ -158,7 +178,7 @@ class MAVLinkService {
   private searchProgressCount: number = 0;
 
   constructor() {
-    this.addStatusMessage('NOTICE', 5, 'MAVLink Engine Initialized. Ready for Pixhawk USB OTG auto-detection.');
+    this.logDiagnostic('SYSTEM', 'MAVLink Engine Initialized. Ready for Pixhawk USB OTG auto-detection.', 'info');
     
     // Subscribe to USB byte stream from unified cross-platform USB Host
     usbHostService.subscribeData((chunk: Uint8Array) => {
@@ -171,49 +191,118 @@ class MAVLinkService {
       this.handleUsbHostStateChange(phase, message, diag);
     });
 
-    // Start heartbeat watchdog (checks every 500ms)
+    // Start heartbeat watchdog
     this.startHeartbeatWatchdog();
   }
 
+  public logDiagnostic(tag: DiagnosticsLogEntry['tag'], message: string, level: DiagnosticsLogEntry['level'] = 'info') {
+    const entry: DiagnosticsLogEntry = {
+      id: `DIAG_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+      timestamp: Date.now(),
+      tag,
+      message,
+      level
+    };
+    this.connectionState.diagnosticsLogs = [entry, ...this.connectionState.diagnosticsLogs.slice(0, 99)];
+    this.notifyConnection();
+  }
+
   private handleUsbHostStateChange(phase: ConnectionPhase, message: string, diag: Partial<UsbDeviceDiagnostics>) {
-    this.connectionState.phase = phase;
+    this.connectionState.phaseMessage = message;
     this.connectionState.diagnostics = {
       ...this.connectionState.diagnostics,
       ...diag
     };
 
     if (diag.productName || diag.deviceName) {
-      this.connectionState.portOrAddress = `${diag.productName || diag.deviceName} (@ ${diag.baudRate || this.connectionState.baudRate})`;
+      this.connectionState.portOrAddress = `${diag.productName || diag.deviceName} (@ ${diag.baudRate || this.connectionState.baudRate} baud)`;
     }
 
     if (phase === 'DISCONNECTED') {
+      this.connectionState.phase = 'DISCONNECTED';
       this.connectionState.isConnected = false;
+      this.connectionState.isUsbConnected = false;
       this.connectionState.isReceivingTelemetry = false;
       this.connectionState.isRealHardware = false;
       this.telemetry.pixhawkConnected = false;
       this.telemetry.isArmed = false;
-      this.addStatusMessage('WARNING', 4, message);
+      this.clearHeartbeatWaitTimer();
+      this.logDiagnostic('USB', message || 'USB Device Disconnected', 'warn');
+      this.addStatusMessage('WARNING', 4, message || 'USB Device Disconnected');
     } else if (phase === 'USB_DEVICE_DETECTED') {
+      this.connectionState.phase = 'USB_DEVICE_DETECTED';
       this.connectionState.isRealHardware = true;
+      this.connectionState.isUsbConnected = false;
       this.connectionState.connectionType = 'USB_SERIAL';
+      this.logDiagnostic('USB', `[USB] Device attached: ${diag.productName || 'Pixhawk / Flight Controller'} (VID: 0x${diag.vendorId?.toString(16).toUpperCase() || '????'}, PID: 0x${diag.productId?.toString(16).toUpperCase() || '????'})`, 'info');
       this.addStatusMessage('INFO', 6, message);
-    } else if (phase === 'USB_PERMISSION_REQUESTED') {
-      this.addStatusMessage('INFO', 6, 'Pixhawk detected. Requesting USB permission...');
-    } else if (phase === 'USB_PERMISSION_GRANTED') {
-      this.addStatusMessage('INFO', 6, 'USB permission granted. Opening serial interface...');
-    } else if (phase === 'SERIAL_INTERFACE_OPENED') {
-      this.connectionState.phase = 'MAVLINK_INITIALIZING';
-      this.addStatusMessage('INFO', 6, 'Serial interface opened. Listening for MAVLink HEARTBEAT...');
-      // Request MAVLink telemetry streams
+    } else if (phase === 'REQUESTING_PERMISSION') {
+      this.connectionState.phase = 'REQUESTING_PERMISSION';
+      this.logDiagnostic('USB', '[USB] Requesting Android USB permission...', 'info');
+      this.addStatusMessage('INFO', 6, 'Requesting Android USB permission...');
+    } else if (phase === 'PERMISSION_GRANTED') {
+      this.connectionState.phase = 'PERMISSION_GRANTED';
+      this.logDiagnostic('USB', '[USB] USB permission granted by user', 'success');
+      this.addStatusMessage('INFO', 6, 'USB permission granted');
+    } else if (phase === 'OPENING_USB') {
+      this.connectionState.phase = 'OPENING_USB';
+      this.logDiagnostic('USB', '[USB] Opening USB communication interface & bulk endpoints...', 'info');
+    } else if (phase === 'USB_CONNECTED') {
+      // Physical USB interface is open! Now listen for MAVLink HEARTBEAT
+      this.connectionState.isUsbConnected = true;
+      this.connectionState.phase = 'WAITING_FOR_HEARTBEAT';
+      this.connectionState.phaseMessage = 'USB connected. Waiting for MAVLink heartbeat…';
+      this.logDiagnostic('USB', `[USB] Interface opened @ ${this.connectionState.baudRate} baud. IN EP found: ${diag.endpointIn || 1}, OUT EP found: ${diag.endpointOut || 2}`, 'success');
+      this.logDiagnostic('MAVLINK', '[MAVLINK] Starting parser & listening for HEARTBEAT message...', 'info');
+      this.addStatusMessage('INFO', 6, 'USB connection active. Listening for Pixhawk MAVLink heartbeat…');
+
+      this.startHeartbeatWaitTimeout();
       this.requestMavlinkDataStreams();
-    } else if (phase === 'ERROR') {
+    } else if (
+      phase === 'USB_NOT_DETECTED' ||
+      phase === 'PERMISSION_DENIED' ||
+      phase === 'USB_OPEN_FAILED' ||
+      phase === 'INTERFACE_NOT_SUPPORTED' ||
+      phase === 'IOS_UNSUPPORTED'
+    ) {
+      this.connectionState.phase = phase;
+      this.connectionState.isUsbConnected = false;
+      this.connectionState.isConnected = false;
       this.connectionState.errorMessage = message;
       this.connectionState.diagnostics.lastError = message;
+      this.clearHeartbeatWaitTimer();
+      this.logDiagnostic('ERROR', `[ERROR] ${message}`, 'error');
       this.addStatusMessage('ERROR', 3, message);
     }
 
     this.notifyConnection();
     this.notifyTelemetry();
+  }
+
+  private startHeartbeatWaitTimeout() {
+    this.clearHeartbeatWaitTimer();
+    this.heartbeatWaitStartTime = Date.now();
+
+    // If no heartbeat within 7.5 seconds after USB connection established -> HEARTBEAT_TIMEOUT
+    this.heartbeatWaitingTimer = setTimeout(() => {
+      if (this.connectionState.isUsbConnected && !this.connectionState.isConnected) {
+        this.connectionState.phase = 'HEARTBEAT_TIMEOUT';
+        const timeoutMsg = 'USB connected, but MAVLink heartbeat was not received. Verify Pixhawk is powered & baud rate matches.';
+        this.connectionState.phaseMessage = timeoutMsg;
+        this.connectionState.errorMessage = timeoutMsg;
+        this.connectionState.diagnostics.lastError = timeoutMsg;
+        this.logDiagnostic('MAVLINK', `[MAVLINK] Heartbeat timeout (no response within 7.5s). ${timeoutMsg}`, 'warn');
+        this.addStatusMessage('WARNING', 4, timeoutMsg);
+        this.notifyConnection();
+      }
+    }, 7500);
+  }
+
+  private clearHeartbeatWaitTimer() {
+    if (this.heartbeatWaitingTimer) {
+      clearTimeout(this.heartbeatWaitingTimer);
+      this.heartbeatWaitingTimer = null;
+    }
   }
 
   private startHeartbeatWatchdog() {
@@ -223,21 +312,25 @@ class MAVLinkService {
         const ageMs = Date.now() - this.connectionState.lastHeartbeat;
         this.connectionState.diagnostics.lastHeartbeatAgeMs = ageMs;
 
-        // Clean up old timestamps > 5s
         const now = Date.now();
         this.heartbeatTimestamps = this.heartbeatTimestamps.filter(t => now - t < 5000);
         this.connectionState.heartbeatHz = +(this.heartbeatTimestamps.length / 5.0).toFixed(1);
         this.connectionState.diagnostics.heartbeatHz = this.connectionState.heartbeatHz;
 
-        if (ageMs > 3500) {
+        if (ageMs > 4000) {
           if (this.connectionState.isReceivingTelemetry) {
             this.connectionState.isReceivingTelemetry = false;
-            this.addStatusMessage('WARNING', 4, 'MAVLink Telemetry Stream Paused (No Heartbeat > 3.5s)');
+            this.connectionState.phase = 'WAITING_FOR_HEARTBEAT';
+            this.connectionState.phaseMessage = 'MAVLink Telemetry Paused (Heartbeat age > 4s)';
+            this.logDiagnostic('MAVLINK', '[MAVLINK] Heartbeat stream paused (> 4s since last packet)', 'warn');
+            this.addStatusMessage('WARNING', 4, 'MAVLink Telemetry Stream Paused (No Heartbeat > 4s)');
             this.notifyConnection();
           }
         } else {
           if (!this.connectionState.isReceivingTelemetry) {
             this.connectionState.isReceivingTelemetry = true;
+            this.connectionState.phase = 'TELEMETRY_ACTIVE';
+            this.connectionState.phaseMessage = 'Telemetry Active';
             this.notifyConnection();
           }
         }
@@ -267,11 +360,12 @@ class MAVLinkService {
   }
 
   public getConnectionState(): PixhawkConnectionState {
-    const isReceiving = this.connectionState.isConnected && (Date.now() - this.connectionState.lastHeartbeat < 3500);
+    const isReceiving = this.connectionState.isConnected && (Date.now() - this.connectionState.lastHeartbeat < 4000);
     return { 
       ...this.connectionState,
       isReceivingTelemetry: isReceiving,
-      diagnostics: { ...this.connectionState.diagnostics }
+      diagnostics: { ...this.connectionState.diagnostics },
+      diagnosticsLogs: [...this.connectionState.diagnosticsLogs]
     };
   }
 
@@ -294,6 +388,7 @@ class MAVLinkService {
 
     this.telemetry.distanceToHome = 0;
     this.notifyTelemetry();
+    this.logDiagnostic('SYSTEM', `Home Point Locked: ${validLat.toFixed(6)}, ${validLon.toFixed(6)} (Alt: ${validAlt.toFixed(1)}m)`, 'info');
     this.addStatusMessage('INFO', 6, `Home Point Locked: ${validLat.toFixed(6)}, ${validLon.toFixed(6)}`);
     return this.homePoint;
   }
@@ -310,7 +405,6 @@ class MAVLinkService {
     this.connectionState.latestStatusMessage = msg;
     this.connectionState.statusHistory = [msg, ...this.connectionState.statusHistory.slice(0, 24)];
 
-    // Check if message is pre-arm failure
     const lower = text.toLowerCase();
     if (lower.includes('prearm') || lower.includes('fail') || lower.includes('check')) {
       this.connectionState.preArmChecksPassed = false;
@@ -324,10 +418,10 @@ class MAVLinkService {
 
   public evaluatePreArmSafety(): { passed: boolean; reason?: string } {
     if (!this.connectionState.isConnected) {
-      return { passed: false, reason: 'Pixhawk FC Disconnected (Connect USB OTG)' };
+      return { passed: false, reason: 'Pixhawk FC Disconnected (Connect USB OTG & wait for Heartbeat)' };
     }
 
-    if (Date.now() - this.connectionState.lastHeartbeat > 3500) {
+    if (Date.now() - this.connectionState.lastHeartbeat > 4000) {
       return { passed: false, reason: 'MAVLink Telemetry Lost (No Heartbeat from FC)' };
     }
 
@@ -348,36 +442,49 @@ class MAVLinkService {
   }
 
   /**
-   * Automatic 1-Click Hardware Connection (Zero Port Selection Required)
+   * 1-Click Hardware Connection (Zero Port Selection Required)
    */
   public async connectHardware(baudRate: number = 115200): Promise<boolean> {
     if (this.simInterval) clearInterval(this.simInterval);
     this.connectionState.baudRate = baudRate;
     this.connectionState.connectionType = 'USB_SERIAL';
     this.connectionState.isRealHardware = true;
+    this.logDiagnostic('TRANSPORT', `Initiating hardware connection @ ${baudRate} baud...`, 'info');
     return await usbHostService.autoConnect(baudRate);
   }
 
+  public async scanUsbDevices(): Promise<any[]> {
+    this.logDiagnostic('USB', 'Scanning connected USB devices on USB Host...', 'info');
+    return await usbHostService.scanUsbDevices();
+  }
+
+  public async requestUsbPermission(): Promise<boolean> {
+    this.logDiagnostic('USB', 'Requesting explicit USB permission for detected flight controller...', 'info');
+    return await usbHostService.requestUsbPermission();
+  }
+
   public async disconnect(): Promise<void> {
+    this.clearHeartbeatWaitTimer();
     await usbHostService.disconnect();
     this.connectionState.isConnected = false;
+    this.connectionState.isUsbConnected = false;
     this.connectionState.isRealHardware = false;
     this.connectionState.phase = 'DISCONNECTED';
+    this.connectionState.phaseMessage = 'Disconnected';
     this.telemetry.pixhawkConnected = false;
     this.telemetry.isArmed = false;
+    this.logDiagnostic('TRANSPORT', 'Connection closed by user', 'info');
     this.notifyConnection();
     this.notifyTelemetry();
   }
 
-  /**
-   * Legacy alias for connectHardware
-   */
-  public async connectWebSerial(baudRate: number = 115200): Promise<boolean> {
-    return this.connectHardware(baudRate);
-  }
-
-  public async disconnectSerial(): Promise<void> {
-    return this.disconnect();
+  public async setTransport(transportId: string): Promise<boolean> {
+    const success = transportManager.setTransport(transportId);
+    if (success) {
+      this.logDiagnostic('TRANSPORT', `Active transport changed to ${transportId}`, 'info');
+      this.notifyConnection();
+    }
+    return success;
   }
 
   /**
@@ -400,7 +507,7 @@ class MAVLinkService {
 
       if (!isV2 && this.rxBufferLen >= 6) { // MAVLink 1 header
         const payloadLen = this.rxBuffer[1];
-        const totalLen = 6 + payloadLen + 2; // header + payload + crc
+        const totalLen = 6 + payloadLen + 2;
         if (this.rxBufferLen >= totalLen) {
           this.decodeMavlink1Packet(this.rxBuffer.subarray(0, totalLen));
           this.rxBufferLen = 0;
@@ -415,7 +522,7 @@ class MAVLinkService {
       }
 
       if (this.rxBufferLen >= 280) {
-        this.rxBufferLen = 0; // overflow safety
+        this.rxBufferLen = 0;
       }
     }
   }
@@ -428,7 +535,7 @@ class MAVLinkService {
     const msgId = frame[5];
     const payload = frame.subarray(6, 6 + payloadLen);
 
-    this.handleParsedMavlinkMessage(msgId, payload, seq, sysId, compId);
+    this.handleParsedMavlinkMessage(msgId, payload, seq, sysId, compId, 'MAVLink 1.0');
   }
 
   private decodeMavlink2Packet(frame: Uint8Array) {
@@ -439,18 +546,26 @@ class MAVLinkService {
     const msgId = frame[7] | (frame[8] << 8) | (frame[9] << 16);
     const payload = frame.subarray(10, 10 + payloadLen);
 
-    this.handleParsedMavlinkMessage(msgId, payload, seq, sysId, compId);
+    this.handleParsedMavlinkMessage(msgId, payload, seq, sysId, compId, 'MAVLink 2.0');
   }
 
-  private handleParsedMavlinkMessage(msgId: number, payload: Uint8Array, seq: number, sysId: number, compId: number) {
+  private handleParsedMavlinkMessage(
+    msgId: number,
+    payload: Uint8Array,
+    seq: number,
+    sysId: number,
+    compId: number,
+    mavVersion: string
+  ) {
     const now = Date.now();
     this.connectionState.diagnostics.totalPacketsReceived++;
 
     const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
 
     switch (msgId) {
-      // HEARTBEAT (msgId = 0) -> The ONLY True Proof of Connection!
+      // HEARTBEAT (msgId = 0) -> Proof of MAVLink Connection!
       case 0: {
+        this.clearHeartbeatWaitTimer();
         this.connectionState.lastHeartbeat = now;
         this.heartbeatTimestamps.push(now);
         this.connectionState.diagnostics.heartbeatsCount++;
@@ -458,12 +573,13 @@ class MAVLinkService {
         this.connectionState.componentId = compId;
         this.connectionState.diagnostics.systemId = sysId;
         this.connectionState.diagnostics.componentId = compId;
+        this.connectionState.mavlinkVersion = mavVersion;
 
-        // Transition connection state machine to CONNECTED
         const wasNotConnected = !this.connectionState.isConnected;
         this.connectionState.isConnected = true;
         this.connectionState.isReceivingTelemetry = true;
-        this.connectionState.phase = 'FLIGHT_CONTROLLER_CONNECTED';
+        this.connectionState.phase = 'MAVLINK_CONNECTED';
+        this.connectionState.phaseMessage = `Pixhawk Connected (${mavVersion})`;
         this.telemetry.pixhawkConnected = true;
 
         if (payload.length >= 9) {
@@ -483,7 +599,8 @@ class MAVLinkService {
         }
 
         if (wasNotConnected) {
-          this.addStatusMessage('INFO', 6, `Flight Controller Connected: Heartbeat Received from SysID ${sysId} (${this.connectionState.autopilotType})`);
+          this.logDiagnostic('MAVLINK', `[MAVLINK] HEARTBEAT received! SysID: ${sysId}, CompID: ${compId}, Autopilot: ${this.connectionState.autopilotType}, Type: ${this.connectionState.diagnostics.vehicleType}`, 'success');
+          this.addStatusMessage('INFO', 6, `Pixhawk Connected: Heartbeat Received from SysID ${sysId} (${this.connectionState.autopilotType})`);
         }
 
         this.emitPacket('HEARTBEAT', { sysId, compId, seq });
@@ -550,7 +667,7 @@ class MAVLinkService {
           const lat = view.getInt32(0, true) / 1e7;
           const lon = view.getInt32(4, true) / 1e7;
           const alt = view.getInt32(12, true) / 1000;
-          const eph = view.getUint16(16, true) / 100; // HDOP
+          const eph = view.getUint16(16, true) / 100;
           const satellitesVisible = view.getUint8(29);
 
           const fixMap: Record<number, GPSLocation['fixType']> = {
@@ -610,7 +727,7 @@ class MAVLinkService {
         break;
       }
 
-      // STATUSTEXT (msgId = 253) -> Live Pixhawk Messages & Errors!
+      // STATUSTEXT (msgId = 253)
       case 253: {
         if (payload.length >= 1) {
           const severityLevel = view.getUint8(0);
@@ -622,6 +739,7 @@ class MAVLinkService {
             text += String.fromCharCode(textBytes[j]);
           }
           if (text.length > 0) {
+            this.logDiagnostic('MAVLINK', `[STATUSTEXT] [${severity}] ${text}`, severityLevel <= 3 ? 'error' : severityLevel === 4 ? 'warn' : 'info');
             this.addStatusMessage(severity, severityLevel, text);
           }
         }
@@ -634,11 +752,9 @@ class MAVLinkService {
           const command = view.getUint16(0, true);
           const result = view.getUint8(2);
           const resultNames = ['ACCEPTED', 'TEMP_REJECTED', 'DENIED', 'UNSUPPORTED', 'FAILED', 'IN_PROGRESS'];
-          this.addStatusMessage(
-            result === 0 ? 'INFO' : 'WARNING',
-            result === 0 ? 6 : 4,
-            `Command ${command} ACK: ${resultNames[result] || `CODE_${result}`}`
-          );
+          const resText = `Command ${command} ACK: ${resultNames[result] || `CODE_${result}`}`;
+          this.logDiagnostic('MAVLINK', `[COMMAND_ACK] ${resText}`, result === 0 ? 'success' : 'warn');
+          this.addStatusMessage(result === 0 ? 'INFO' : 'WARNING', result === 0 ? 6 : 4, resText);
           this.emitPacket('COMMAND_ACK', { command, result });
         }
         break;
@@ -646,9 +762,6 @@ class MAVLinkService {
     }
   }
 
-  /**
-   * Request MAVLink Telemetry Streams from Pixhawk
-   */
   public async requestMavlinkDataStreams() {
     await this.sendMavlinkCommandLong(511 /* MAV_CMD_SET_MESSAGE_INTERVAL */, 0 /* HEARTBEAT */, 1000000 /* 1Hz */);
     await this.sendMavlinkCommandLong(511, 1 /* SYS_STATUS */, 200000 /* 5Hz */);
@@ -658,10 +771,14 @@ class MAVLinkService {
   }
 
   public async armDrone(): Promise<boolean> {
+    if (!this.connectionState.isConnected && !this.simInterval) {
+      this.logDiagnostic('ERROR', 'Cannot arm: MAVLink connection not confirmed (No Heartbeat)', 'error');
+      return false;
+    }
     this.addStatusMessage('NOTICE', 5, 'Sending MAVLink ARM Command to Pixhawk FC...');
     if (this.connectionState.isRealHardware) {
       await this.setFlightMode('GUIDED');
-      await this.sendMavlinkCommandLong(400 /* MAV_CMD_COMPONENT_ARM_DISARM */, 1 /* Arm */, 21196 /* Force check override if permitted */);
+      await this.sendMavlinkCommandLong(400 /* MAV_CMD_COMPONENT_ARM_DISARM */, 1 /* Arm */, 21196);
       return true;
     } else {
       this.telemetry.isArmed = true;
@@ -688,6 +805,10 @@ class MAVLinkService {
   }
 
   public async setFlightMode(modeName: 'GUIDED' | 'AUTO' | 'STABILIZE' | 'LOITER' | 'RTL' | 'LAND'): Promise<boolean> {
+    if (!this.connectionState.isConnected && !this.simInterval) {
+      this.logDiagnostic('ERROR', `Cannot set mode ${modeName}: MAVLink not connected`, 'error');
+      return false;
+    }
     const modeNumbers: Record<string, number> = {
       STABILIZE: 0,
       AUTO: 3,
@@ -710,6 +831,10 @@ class MAVLinkService {
   }
 
   public async commandTakeoff(targetAltMeters: number = 20): Promise<boolean> {
+    if (!this.connectionState.isConnected && !this.simInterval) {
+      this.logDiagnostic('ERROR', 'Cannot takeoff: MAVLink not connected', 'error');
+      return false;
+    }
     this.addStatusMessage('NOTICE', 5, `Sending Takeoff Command to ${targetAltMeters}m...`);
     if (this.connectionState.isRealHardware) {
       await this.sendMavlinkCommandLong(22 /* MAV_CMD_NAV_TAKEOFF */, 0, 0, 0, 0, 0, 0, targetAltMeters);
@@ -724,6 +849,10 @@ class MAVLinkService {
   }
 
   public async commandStartSearch(): Promise<boolean> {
+    if (!this.connectionState.isConnected && !this.simInterval) {
+      this.logDiagnostic('ERROR', 'Cannot start search: MAVLink not connected', 'error');
+      return false;
+    }
     this.addStatusMessage('NOTICE', 5, 'Starting Autonomous Search Pattern...');
     if (this.connectionState.isRealHardware) {
       await this.setFlightMode('AUTO');
@@ -783,9 +912,9 @@ class MAVLinkService {
     view.setFloat32(20, param6, true);
     view.setFloat32(24, param7, true);
     view.setUint16(28, command, true);
-    view.setUint8(30, this.connectionState.systemId || 1); // target_system
-    view.setUint8(31, this.connectionState.componentId || 1); // target_component
-    view.setUint8(32, 0); // confirmation
+    view.setUint8(30, this.connectionState.systemId || 1);
+    view.setUint8(31, this.connectionState.componentId || 1);
+    view.setUint8(32, 0);
 
     const packet = this.buildMavlink1Frame(76 /* COMMAND_LONG */, payload);
     const success = await usbHostService.sendBytes(packet);
@@ -798,11 +927,11 @@ class MAVLinkService {
     this.sendSeq = (this.sendSeq + 1) % 256;
     const len = payload.length;
     const frame = new Uint8Array(6 + len + 2);
-    frame[0] = 0xFE; // MAVLink 1 STX
+    frame[0] = 0xFE;
     frame[1] = len;
     frame[2] = this.sendSeq;
-    frame[3] = 255; // GCS System ID
-    frame[4] = 190; // GCS Component ID
+    frame[3] = 255;
+    frame[4] = 190;
     frame[5] = msgId;
 
     frame.set(payload, 6);
@@ -823,15 +952,15 @@ class MAVLinkService {
     }
 
     const crcExtras: Record<number, number> = {
-      0: 50,    // HEARTBEAT
-      1: 124,   // SYS_STATUS
-      24: 30,   // GPS_RAW_INT
-      30: 39,   // ATTITUDE
-      33: 104,  // GLOBAL_POSITION_INT
-      76: 152,  // COMMAND_LONG
-      77: 143,  // COMMAND_ACK
-      147: 154, // BATTERY_STATUS
-      253: 83   // STATUSTEXT
+      0: 50,
+      1: 124,
+      24: 30,
+      30: 39,
+      33: 104,
+      76: 152,
+      77: 143,
+      147: 154,
+      253: 83
     };
 
     const extra = crcExtras[msgId] ?? 0;
@@ -856,9 +985,12 @@ class MAVLinkService {
   }
 
   public switchToSimulationMode() {
+    transportManager.setTransport('simulator');
     this.connectionState.connectionType = 'SIMULATED';
-    this.connectionState.phase = 'FLIGHT_CONTROLLER_CONNECTED';
+    this.connectionState.phase = 'MAVLINK_CONNECTED';
+    this.connectionState.phaseMessage = 'SITL Simulator Active (Bench Test)';
     this.connectionState.isConnected = true;
+    this.connectionState.isUsbConnected = true;
     this.connectionState.isRealHardware = false;
     this.connectionState.portOrAddress = 'SITL Simulator (Bench Test)';
     this.connectionState.lastHeartbeat = Date.now();
@@ -871,6 +1003,7 @@ class MAVLinkService {
     this.telemetry.gps.hdop = 0.8;
     this.telemetry.gps.fixType = '3D_FIX';
 
+    this.logDiagnostic('TRANSPORT', 'Switched to SITL Bench Test Simulator', 'info');
     this.addStatusMessage('INFO', 6, 'Switched to SITL Simulation Mode.');
     this.startSimLoop();
     this.notifyConnection();

@@ -1,4 +1,4 @@
-// MAVLink 2.4.8 message structures & communication layer types
+// MAVLink message structures & communication layer types
 
 export type MAVLinkMessageType =
   | 'HEARTBEAT'
@@ -25,19 +25,40 @@ export interface MAVLinkPacket {
   timestamp: number;
 }
 
-export type FlightControllerConnection = 'USB_SERIAL' | 'UDP_TELEMETRY' | 'TCP_CLIENT' | 'BLUETOOTH' | 'SIMULATED';
+export type FlightControllerConnection = 
+  | 'USB_SERIAL' 
+  | 'UDP_TELEMETRY' 
+  | 'TCP_CLIENT' 
+  | 'BLUETOOTH' 
+  | 'IOS_ACCESSORY' 
+  | 'SIMULATED';
 
 export type ConnectionPhase =
   | 'DISCONNECTED'
   | 'USB_DEVICE_DETECTED'
-  | 'USB_PERMISSION_REQUESTED'
-  | 'USB_PERMISSION_GRANTED'
-  | 'USB_INTERFACE_DETECTED'
-  | 'SERIAL_INTERFACE_OPENED'
-  | 'MAVLINK_INITIALIZING'
-  | 'MAVLINK_HEARTBEAT_RECEIVED'
-  | 'FLIGHT_CONTROLLER_CONNECTED'
-  | 'ERROR';
+  | 'REQUESTING_PERMISSION'
+  | 'PERMISSION_GRANTED'
+  | 'OPENING_USB'
+  | 'USB_CONNECTED'
+  | 'WAITING_FOR_HEARTBEAT'
+  | 'MAVLINK_CONNECTED'
+  | 'TELEMETRY_ACTIVE'
+  // Failure / Diagnostics states
+  | 'USB_NOT_DETECTED'
+  | 'PERMISSION_DENIED'
+  | 'USB_OPEN_FAILED'
+  | 'INTERFACE_NOT_SUPPORTED'
+  | 'HEARTBEAT_TIMEOUT'
+  | 'MAVLINK_ERROR'
+  | 'IOS_UNSUPPORTED';
+
+export interface DiagnosticsLogEntry {
+  id: string;
+  timestamp: number;
+  tag: 'USB' | 'MAVLINK' | 'TRANSPORT' | 'SYSTEM' | 'ERROR';
+  message: string;
+  level: 'info' | 'warn' | 'error' | 'success';
+}
 
 export interface UsbDeviceDiagnostics {
   deviceName?: string;
@@ -59,8 +80,9 @@ export interface UsbDeviceDiagnostics {
   componentId?: number;
   autopilotType?: string;
   vehicleType?: string;
-  driverType: 'NATIVE_ANDROID_USB' | 'WEBSERIAL' | 'WEBUSB' | 'SIMULATOR';
+  driverType: 'NATIVE_ANDROID_USB' | 'IOS_ACCESSORY' | 'WEBSERIAL' | 'WEBUSB' | 'UDP' | 'TCP' | 'SIMULATOR';
   lastError?: string;
+  hostPowerStatus?: 'HOST_ACTIVE' | 'DEVICE_POWERED' | 'CHECK_EXTERNAL_POWER' | 'UNKNOWN';
 }
 
 export interface PixhawkStatusMessage {
@@ -74,7 +96,9 @@ export interface PixhawkStatusMessage {
 export interface PixhawkConnectionState {
   connectionType: FlightControllerConnection;
   phase: ConnectionPhase;
+  phaseMessage: string;
   isConnected: boolean; // Only true when valid HEARTBEAT is verified
+  isUsbConnected: boolean; // True when physical USB/transport link is active
   portOrAddress: string;
   baudRate: number;
   bytesReceived: number;
@@ -84,13 +108,14 @@ export interface PixhawkConnectionState {
   packetLossPercent: number;
   firmwareVersion: string;
   autopilotType: string;
-  mavlinkVersion: string; // 'MAVLink 2.4.8'
+  mavlinkVersion: string;
   isReceivingTelemetry: boolean;
   ekfHealthy: boolean;
   preArmChecksPassed: boolean;
   preArmFailReason?: string;
   latestStatusMessage?: PixhawkStatusMessage;
   statusHistory: PixhawkStatusMessage[];
+  diagnosticsLogs: DiagnosticsLogEntry[];
   isRealHardware: boolean;
   systemId?: number;
   componentId?: number;

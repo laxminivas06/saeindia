@@ -56,38 +56,36 @@ public class UsbSerialPlugin extends Plugin {
                     UsbDevice device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
                     if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
                         if (device != null) {
-                            Log.i(TAG, "USB Permission granted for device: " + device.getDeviceName());
-                            notifyStateChange("USB_PERMISSION_GRANTED", "Permission granted for " + getDeviceDisplayName(device), device);
-                            // Automatically proceed to open interface and start serial reader
+                            Log.i(TAG, "[USB] Permission granted for device: " + device.getDeviceName());
+                            notifyStateChange("PERMISSION_GRANTED", "USB permission granted for " + getDeviceDisplayName(device), device);
                             openDeviceAndStartReader(device, currentBaudRate, null);
                         }
                     } else {
-                        Log.w(TAG, "USB Permission denied for device: " + (device != null ? device.getDeviceName() : "Unknown"));
-                        lastErrorMessage = "USB permission denied by user.";
-                        notifyStateChange("ERROR", "USB permission denied. Allow USB access to connect to the flight controller.", device);
+                        Log.w(TAG, "[USB] Permission denied for device: " + (device != null ? device.getDeviceName() : "Unknown"));
+                        lastErrorMessage = "USB permission denied. Grant permission to connect to the Pixhawk flight controller.";
+                        notifyStateChange("PERMISSION_DENIED", lastErrorMessage, device);
                     }
                 }
             } else if (UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(action)) {
                 UsbDevice device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
-                Log.i(TAG, "USB Device Attached: " + (device != null ? device.getDeviceName() : "Unknown"));
+                Log.i(TAG, "[USB] Device Attached: " + (device != null ? device.getDeviceName() : "Unknown"));
                 if (device != null) {
                     JSObject ret = new JSObject();
                     ret.put("device", serializeDevice(device));
                     notifyListeners("usbAttached", ret);
-                    notifyStateChange("USB_DEVICE_DETECTED", "Pixhawk/USB device attached: " + getDeviceDisplayName(device), device);
-                    // Automatically trigger auto-connect
+                    notifyStateChange("USB_DEVICE_DETECTED", "USB device attached: " + getDeviceDisplayName(device), device);
                     autoConnectDevice(device, currentBaudRate, null);
                 }
             } else if (UsbManager.ACTION_USB_DEVICE_DETACHED.equals(action)) {
                 UsbDevice device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
-                Log.i(TAG, "USB Device Detached: " + (device != null ? device.getDeviceName() : "Unknown"));
+                Log.i(TAG, "[USB] Device Detached: " + (device != null ? device.getDeviceName() : "Unknown"));
                 JSObject ret = new JSObject();
                 if (device != null) {
                     ret.put("device", serializeDevice(device));
                 }
                 notifyListeners("usbDetached", ret);
                 closeCurrentConnection();
-                notifyStateChange("DISCONNECTED", "Flight Controller Disconnected (OTG removed)", null);
+                notifyStateChange("DISCONNECTED", "Flight Controller Disconnected (USB cable removed)", null);
             }
         }
     };
@@ -108,7 +106,7 @@ public class UsbSerialPlugin extends Plugin {
         } else {
             context.registerReceiver(usbReceiver, filter);
         }
-        Log.i(TAG, "UsbSerialPlugin loaded and USB receivers registered.");
+        Log.i(TAG, "[USB] UsbSerialPlugin loaded and USB receivers registered.");
     }
 
     @Override
@@ -139,6 +137,42 @@ public class UsbSerialPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void requestPermission(PluginCall call) {
+        if (usbManager == null) {
+            usbManager = (UsbManager) getContext().getSystemService(Context.USB_SERVICE);
+        }
+        HashMap<String, UsbDevice> deviceList = usbManager.getDeviceList();
+        if (deviceList.isEmpty()) {
+            call.reject("USB_NOT_DETECTED", "No USB flight controller detected. Connect Pixhawk via USB OTG.");
+            return;
+        }
+
+        UsbDevice targetDevice = currentDevice;
+        if (targetDevice == null) {
+            targetDevice = selectBestDevice(deviceList);
+        }
+
+        if (targetDevice == null) {
+            call.reject("USB_NOT_DETECTED", "No compatible USB device found.");
+            return;
+        }
+
+        if (usbManager.hasPermission(targetDevice)) {
+            JSObject ret = new JSObject();
+            ret.put("granted", true);
+            ret.put("device", serializeDevice(targetDevice));
+            call.resolve(ret);
+            return;
+        }
+
+        promptUsbPermission(targetDevice);
+        JSObject ret = new JSObject();
+        ret.put("requested", true);
+        ret.put("device", serializeDevice(targetDevice));
+        call.resolve(ret);
+    }
+
+    @PluginMethod
     public void autoConnect(PluginCall call) {
         int baudRate = call.getInt("baudRate", 115200);
         this.currentBaudRate = baudRate;
@@ -149,62 +183,57 @@ public class UsbSerialPlugin extends Plugin {
 
         HashMap<String, UsbDevice> deviceList = usbManager.getDeviceList();
         if (deviceList.isEmpty()) {
-            lastErrorMessage = "USB device not detected. Check whether phone supports USB Host/OTG and OTG is enabled.";
-            notifyStateChange("DISCONNECTED", lastErrorMessage, null);
+            lastErrorMessage = "USB device not detected. Verify OTG is enabled and cable supports data.";
+            notifyStateChange("USB_NOT_DETECTED", lastErrorMessage, null);
             JSObject ret = new JSObject();
             ret.put("success", false);
+            ret.put("phase", "USB_NOT_DETECTED");
             ret.put("error", lastErrorMessage);
             call.resolve(ret);
             return;
         }
 
-        // Intelligently identify Pixhawk or USB serial device
-        UsbDevice targetDevice = null;
-        for (UsbDevice device : deviceList.values()) {
-            if (isPixhawkOrSerialDevice(device)) {
-                targetDevice = device;
-                break;
-            }
-        }
-
-        // If no explicit match, pick the first available USB device with communication/bulk interfaces
-        if (targetDevice == null) {
-            for (UsbDevice device : deviceList.values()) {
-                if (hasSerialEndpoints(device)) {
-                    targetDevice = device;
-                    break;
-                }
-            }
-        }
+        UsbDevice targetDevice = selectBestDevice(deviceList);
 
         if (targetDevice == null) {
-            // Fallback to first USB device
             targetDevice = deviceList.values().iterator().next();
         }
 
         autoConnectDevice(targetDevice, baudRate, call);
     }
 
+    private UsbDevice selectBestDevice(HashMap<String, UsbDevice> deviceList) {
+        // 1. Known Pixhawk / ArduPilot / PX4 VIDs
+        for (UsbDevice device : deviceList.values()) {
+            if (isPixhawkVendorId(device.getVendorId())) {
+                return device;
+            }
+        }
+        // 2. Devices with CDC/ACM or serial bulk endpoints
+        for (UsbDevice device : deviceList.values()) {
+            if (hasSerialEndpoints(device)) {
+                return device;
+            }
+        }
+        // 3. Any device with interfaces
+        return deviceList.isEmpty() ? null : deviceList.values().iterator().next();
+    }
+
     private void autoConnectDevice(UsbDevice device, int baudRate, PluginCall call) {
         this.currentDevice = device;
         this.currentBaudRate = baudRate;
 
-        notifyStateChange("USB_DEVICE_DETECTED", "Pixhawk/Serial device found: " + getDeviceDisplayName(device), device);
+        notifyStateChange("USB_DEVICE_DETECTED", "USB device detected: " + getDeviceDisplayName(device), device);
 
         if (!usbManager.hasPermission(device)) {
-            Log.i(TAG, "Requesting USB permission for " + device.getDeviceName());
-            notifyStateChange("USB_PERMISSION_REQUESTED", "Requesting USB permission...", device);
-
-            int flags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? PendingIntent.FLAG_MUTABLE : 0;
-            Intent intent = new Intent(ACTION_USB_PERMISSION);
-            intent.setPackage(getContext().getPackageName());
-            PendingIntent permissionIntent = PendingIntent.getBroadcast(getContext(), 0, intent, flags);
-            usbManager.requestPermission(device, permissionIntent);
+            Log.i(TAG, "[USB] Requesting permission for " + device.getDeviceName());
+            notifyStateChange("REQUESTING_PERMISSION", "Requesting USB permission...", device);
+            promptUsbPermission(device);
 
             if (call != null) {
                 JSObject ret = new JSObject();
                 ret.put("success", true);
-                ret.put("status", "PERMISSION_REQUESTED");
+                ret.put("phase", "REQUESTING_PERMISSION");
                 ret.put("device", serializeDevice(device));
                 call.resolve(ret);
             }
@@ -212,8 +241,16 @@ public class UsbSerialPlugin extends Plugin {
         }
 
         // Already has permission -> Open directly
-        notifyStateChange("USB_PERMISSION_GRANTED", "USB permission already granted", device);
+        notifyStateChange("PERMISSION_GRANTED", "USB permission already granted", device);
         openDeviceAndStartReader(device, baudRate, call);
+    }
+
+    private void promptUsbPermission(UsbDevice device) {
+        int flags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? PendingIntent.FLAG_MUTABLE : 0;
+        Intent intent = new Intent(ACTION_USB_PERMISSION);
+        intent.setPackage(getContext().getPackageName());
+        PendingIntent permissionIntent = PendingIntent.getBroadcast(getContext(), 0, intent, flags);
+        usbManager.requestPermission(device, permissionIntent);
     }
 
     private synchronized void openDeviceAndStartReader(UsbDevice device, int baudRate, PluginCall call) {
@@ -221,13 +258,16 @@ public class UsbSerialPlugin extends Plugin {
         this.currentDevice = device;
         this.currentBaudRate = baudRate;
 
+        notifyStateChange("OPENING_USB", "Opening USB connection...", device);
+
         UsbDeviceConnection connection = usbManager.openDevice(device);
         if (connection == null) {
-            lastErrorMessage = "USB device detected, but could not open UsbDeviceConnection.";
-            notifyStateChange("ERROR", lastErrorMessage, device);
+            lastErrorMessage = "USB interface detected but could not be opened (UsbDeviceConnection returned null).";
+            notifyStateChange("USB_OPEN_FAILED", lastErrorMessage, device);
             if (call != null) {
                 JSObject ret = new JSObject();
                 ret.put("success", false);
+                ret.put("phase", "USB_OPEN_FAILED");
                 ret.put("error", lastErrorMessage);
                 call.resolve(ret);
             }
@@ -237,24 +277,22 @@ public class UsbSerialPlugin extends Plugin {
 
         // Inspect and select the appropriate serial interface and bulk endpoints
         if (!setupInterfacesAndEndpoints(device, connection)) {
-            lastErrorMessage = "Failed to claim USB communication interface or find bulk endpoints.";
-            notifyStateChange("ERROR", lastErrorMessage, device);
+            notifyStateChange("INTERFACE_NOT_SUPPORTED", lastErrorMessage, device);
             closeCurrentConnection();
             if (call != null) {
                 JSObject ret = new JSObject();
                 ret.put("success", false);
+                ret.put("phase", "INTERFACE_NOT_SUPPORTED");
                 ret.put("error", lastErrorMessage);
                 call.resolve(ret);
             }
             return;
         }
 
-        notifyStateChange("USB_INTERFACE_DETECTED", "USB interfaces and Bulk endpoints configured", device);
+        notifyStateChange("USB_CONNECTED", "USB connection established @ " + baudRate + " baud. Waiting for MAVLink heartbeat…", device);
 
         // Configure Serial Line Coding (Baud Rate, 8 data bits, 1 stop bit, no parity)
         configureSerialPort(connection, device, baudRate);
-
-        notifyStateChange("SERIAL_INTERFACE_OPENED", "Serial port opened @ " + baudRate + " baud. Starting MAVLink parser...", device);
 
         // Start background reader thread
         startReaderThread();
@@ -262,7 +300,7 @@ public class UsbSerialPlugin extends Plugin {
         if (call != null) {
             JSObject ret = new JSObject();
             ret.put("success", true);
-            ret.put("status", "SERIAL_OPENED");
+            ret.put("phase", "USB_CONNECTED");
             ret.put("device", serializeDevice(device));
             call.resolve(ret);
         }
@@ -275,31 +313,54 @@ public class UsbSerialPlugin extends Plugin {
         endpointOut = null;
 
         int interfaceCount = device.getInterfaceCount();
-        Log.i(TAG, "Inspecting " + interfaceCount + " interfaces on " + device.getDeviceName());
+        Log.i(TAG, "[USB] Inspecting " + interfaceCount + " interfaces on " + device.getDeviceName());
 
-        // Strategy 1: Look for standard CDC ACM (Control Interface Class 2 + Data Interface Class 10)
+        // ArduPilot / PX4 composite USB devices often expose 2 CDC-ACM pairs (Comm + Data).
+        // First pair is primary MAVLink console.
         for (int i = 0; i < interfaceCount; i++) {
             UsbInterface iface = device.getInterface(i);
-            if (iface.getInterfaceClass() == UsbConstants.USB_CLASS_COMM) {
+            int ifaceClass = iface.getInterfaceClass();
+            Log.i(TAG, "[USB] Interface " + i + ": class=" + ifaceClass + ", subclass=" + iface.getInterfaceSubClass() + ", epCount=" + iface.getEndpointCount());
+
+            if (ifaceClass == UsbConstants.USB_CLASS_COMM && controlInterface == null) {
                 controlInterface = iface;
-                connection.claimInterface(iface, true);
-            } else if (iface.getInterfaceClass() == UsbConstants.USB_CLASS_CDC_DATA) {
-                dataInterface = iface;
-                connection.claimInterface(iface, true);
+                try {
+                    connection.claimInterface(iface, true);
+                    Log.i(TAG, "[USB] Claimed CDC COMM control interface: " + i);
+                } catch (Exception e) {
+                    Log.w(TAG, "[USB] Non-fatal notice claiming control interface: " + e.getMessage());
+                }
+            } else if ((ifaceClass == UsbConstants.USB_CLASS_CDC_DATA || ifaceClass == UsbConstants.USB_CLASS_VENDOR_SPEC || ifaceClass == UsbConstants.USB_CLASS_COMM) && dataInterface == null) {
+                UsbEndpoint in = null;
+                UsbEndpoint out = null;
+
                 for (int e = 0; e < iface.getEndpointCount(); e++) {
                     UsbEndpoint ep = iface.getEndpoint(e);
                     if (ep.getType() == UsbConstants.USB_ENDPOINT_XFER_BULK) {
-                        if (ep.getDirection() == UsbConstants.USB_DIR_IN) {
-                            endpointIn = ep;
-                        } else if (ep.getDirection() == UsbConstants.USB_DIR_OUT) {
-                            endpointOut = ep;
+                        if (ep.getDirection() == UsbConstants.USB_DIR_IN && in == null) {
+                            in = ep;
+                        } else if (ep.getDirection() == UsbConstants.USB_DIR_OUT && out == null) {
+                            out = ep;
                         }
+                    }
+                }
+
+                if (in != null && out != null) {
+                    try {
+                        connection.claimInterface(iface, true);
+                        dataInterface = iface;
+                        endpointIn = in;
+                        endpointOut = out;
+                        Log.i(TAG, "[USB] Claimed data interface " + i + " (IN EP " + in.getEndpointNumber() + ", OUT EP " + out.getEndpointNumber() + ")");
+                        break;
+                    } catch (Exception e) {
+                        Log.w(TAG, "[USB] Could not claim interface " + i + ": " + e.getMessage());
                     }
                 }
             }
         }
 
-        // Strategy 2: If data interface with bulk endpoints not found, inspect all interfaces for Bulk IN & Bulk OUT
+        // Fallback: Scan every interface for any Bulk IN & OUT endpoints
         if (endpointIn == null || endpointOut == null) {
             for (int i = 0; i < interfaceCount; i++) {
                 UsbInterface iface = device.getInterface(i);
@@ -309,26 +370,38 @@ public class UsbSerialPlugin extends Plugin {
                 for (int e = 0; e < iface.getEndpointCount(); e++) {
                     UsbEndpoint ep = iface.getEndpoint(e);
                     if (ep.getType() == UsbConstants.USB_ENDPOINT_XFER_BULK) {
-                        if (ep.getDirection() == UsbConstants.USB_DIR_IN) {
-                            in = ep;
-                        } else if (ep.getDirection() == UsbConstants.USB_DIR_OUT) {
-                            out = ep;
-                        }
+                        if (ep.getDirection() == UsbConstants.USB_DIR_IN && in == null) in = ep;
+                        if (ep.getDirection() == UsbConstants.USB_DIR_OUT && out == null) out = ep;
                     }
                 }
 
                 if (in != null && out != null) {
-                    connection.claimInterface(iface, true);
-                    dataInterface = iface;
-                    endpointIn = in;
-                    endpointOut = out;
-                    Log.i(TAG, "Selected bulk interface " + iface.getId() + " (In EP: " + in.getEndpointNumber() + ", Out EP: " + out.getEndpointNumber() + ")");
-                    break;
+                    try {
+                        connection.claimInterface(iface, true);
+                        dataInterface = iface;
+                        endpointIn = in;
+                        endpointOut = out;
+                        Log.i(TAG, "[USB] Selected bulk interface " + iface.getId() + " (In EP: " + in.getEndpointNumber() + ", Out EP: " + out.getEndpointNumber() + ")");
+                        break;
+                    } catch (Exception e) {
+                        Log.w(TAG, "[USB] Fallback claim failed: " + e.getMessage());
+                    }
                 }
             }
         }
 
-        return endpointIn != null && endpointOut != null;
+        if (endpointIn == null && endpointOut == null) {
+            lastErrorMessage = "No compatible USB interface found (no bulk endpoints).";
+            return false;
+        } else if (endpointIn == null) {
+            lastErrorMessage = "No IN endpoint found on USB interface.";
+            return false;
+        } else if (endpointOut == null) {
+            lastErrorMessage = "No OUT endpoint found on USB interface.";
+            return false;
+        }
+
+        return true;
     }
 
     private void configureSerialPort(UsbDeviceConnection connection, UsbDevice device, int baudRate) {
@@ -353,18 +426,14 @@ public class UsbSerialPlugin extends Plugin {
 
             // Silicon Labs CP210x setup
             if (vid == 0x10C4) {
-                // IFC_ENABLE
-                connection.controlTransfer(0x41, 0x00, 0x0001, 0, null, 0, 1000);
-                // SET_MHS (DTR / RTS high)
-                connection.controlTransfer(0x41, 0x07, 0x0303, 0, null, 0, 1000);
+                connection.controlTransfer(0x41, 0x00, 0x0001, 0, null, 0, 1000); // IFC_ENABLE
+                connection.controlTransfer(0x41, 0x07, 0x0303, 0, null, 0, 1000); // SET_MHS (DTR/RTS)
             }
 
             // FTDI setup
             if (vid == 0x0403) {
-                // SIO_RESET
-                connection.controlTransfer(0x40, 0x00, 0, 0, null, 0, 1000);
-                // SIO_SET_MODEM_CTRL (DTR / RTS)
-                connection.controlTransfer(0x40, 0x01, 0x0303, 0, null, 0, 1000);
+                connection.controlTransfer(0x40, 0x00, 0, 0, null, 0, 1000); // SIO_RESET
+                connection.controlTransfer(0x40, 0x01, 0x0303, 0, null, 0, 1000); // SIO_SET_MODEM_CTRL
             }
 
             // CH340 setup
@@ -373,7 +442,7 @@ public class UsbSerialPlugin extends Plugin {
                 connection.controlTransfer(0x40, 0xA4, 0x00DF, 0, null, 0, 1000);
             }
         } catch (Exception e) {
-            Log.w(TAG, "Non-critical serial configuration notice: " + e.getMessage());
+            Log.w(TAG, "[USB] Non-critical serial configuration notice: " + e.getMessage());
         }
     }
 
@@ -381,7 +450,7 @@ public class UsbSerialPlugin extends Plugin {
         isReading.set(true);
         readThread = new Thread(() -> {
             byte[] buffer = new byte[4096];
-            Log.i(TAG, "USB Serial Read Thread started.");
+            Log.i(TAG, "[USB] USB Read Thread started.");
 
             while (isReading.get() && currentConnection != null && endpointIn != null) {
                 try {
@@ -399,12 +468,12 @@ public class UsbSerialPlugin extends Plugin {
                     }
                 } catch (Exception e) {
                     if (isReading.get()) {
-                        Log.e(TAG, "Bulk read error: " + e.getMessage());
+                        Log.e(TAG, "[USB] Bulk read error: " + e.getMessage());
                     }
                     break;
                 }
             }
-            Log.i(TAG, "USB Serial Read Thread ended.");
+            Log.i(TAG, "[USB] USB Read Thread ended.");
         }, "PixhawkUsbReaderThread");
         readThread.start();
     }
@@ -500,6 +569,7 @@ public class UsbSerialPlugin extends Plugin {
         this.currentStatus = status;
         JSObject ret = new JSObject();
         ret.put("status", status);
+        ret.put("phase", status);
         ret.put("message", message);
         if (device != null) {
             ret.put("device", serializeDevice(device));
@@ -507,14 +577,9 @@ public class UsbSerialPlugin extends Plugin {
         notifyListeners("usbStateChange", ret);
     }
 
-    private boolean isPixhawkOrSerialDevice(UsbDevice device) {
-        int vid = device.getVendorId();
-        // 0x26AC (Pixhawk/3DR), 0x1209 (ArduPilot/ChibiOS), 0x0483 (STM32 VCP), 0x10C4 (CP210x), 0x0403 (FTDI), 0x1A86 (CH340), 0x2E3C (CH9102), 0x067B (PL2303), 0x303A (ESP32)
-        if (vid == 0x26AC || vid == 0x1209 || vid == 0x0483 || vid == 0x10C4 ||
-            vid == 0x0403 || vid == 0x1A86 || vid == 0x2E3C || vid == 0x067B || vid == 0x303A) {
-            return true;
-        }
-        return hasSerialEndpoints(device);
+    private boolean isPixhawkVendorId(int vid) {
+        return vid == 0x26AC || vid == 0x1209 || vid == 0x0483 || vid == 0x10C4 ||
+               vid == 0x0403 || vid == 0x1A86 || vid == 0x2E3C || vid == 0x067B || vid == 0x303A;
     }
 
     private boolean hasSerialEndpoints(UsbDevice device) {
@@ -547,7 +612,7 @@ public class UsbSerialPlugin extends Plugin {
             else if (vid == 0x10C4) name = "CP2102 USB Telemetry";
             else if (vid == 0x0403) name = "FTDI Serial Module";
             else if (vid == 0x1A86 || vid == 0x2E3C) name = "CH340/CH9102 USB Serial";
-            else name = "USB Serial Device (" + String.format("0x%04X:0x%04X", vid, device.getProductId()) + ")";
+            else name = "USB Flight Controller (" + String.format("0x%04X:0x%04X", vid, device.getProductId()) + ")";
         }
         return name;
     }
@@ -570,6 +635,19 @@ public class UsbSerialPlugin extends Plugin {
             obj.put("manufacturerName", "");
             obj.put("serialNumber", "");
         }
+
+        JSArray interfacesArray = new JSArray();
+        for (int i = 0; i < device.getInterfaceCount(); i++) {
+            UsbInterface iface = device.getInterface(i);
+            JSObject ifaceObj = new JSObject();
+            ifaceObj.put("id", iface.getId());
+            ifaceObj.put("interfaceClass", iface.getInterfaceClass());
+            ifaceObj.put("interfaceSubclass", iface.getInterfaceSubClass());
+            ifaceObj.put("endpointCount", iface.getEndpointCount());
+            interfacesArray.put(ifaceObj);
+        }
+        obj.put("interfaces", interfacesArray);
+
         return obj;
     }
 }
