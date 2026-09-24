@@ -152,6 +152,9 @@ export interface PixhawkConnectionState {
   lastCommandName?: string;
   lastCommandAckResultName?: string;
   vehicleState?: 'ARMED' | 'DISARMED' | 'ARMING' | 'DISARMING' | 'UNKNOWN';
+  controlMode?: 'RC' | 'NO_RC';
+  rcSignalDetected?: boolean;
+  rcRssi?: number;
   commandAckHistory: MAVLinkCommandAck[];
   diagnosticsLogs: DiagnosticsLogEntry[];
   isRealHardware: boolean;

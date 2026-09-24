@@ -7,8 +7,8 @@ import { MissionTimer } from '../common/MissionTimer';
 import { TelemetryHUD } from '../common/TelemetryHUD';
 import { StatusBadge } from '../common/StatusBadge';
 import { HomePointSetter } from './HomePointSetter';
-import { PreFlightChecklist } from './PreFlightChecklist';
 import { PreArmChecksPanel } from '../common/PreArmChecksPanel';
+import { ControlModePanel } from '../common/ControlModePanel';
 import { TacticalMap } from './TacticalMap';
 import { PixhawkConnectionCard } from '../Drone/PixhawkConnectionCard';
 import { 
@@ -246,94 +246,24 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
           />
 
           {/* ========================================================================= */}
-          {/* DEDICATED STANDALONE ARM & DISARM BUTTONS (MAV_CMD 400)                   */}
+          {/* FLIGHT CONTROL INTERFACE: RC / NO-RC TOGGLE & TOUCH-SAFE CONTROLS         */}
           {/* ========================================================================= */}
-          <div className="p-3 bg-slate-900/90 rounded-2xl border border-slate-800 space-y-2.5 shadow-lg">
-            <div className="flex items-center justify-between text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-              <span className="flex items-center space-x-1.5">
-                <ShieldCheck className="w-3.5 h-3.5 text-sky-400" />
-                <span>Pixhawk Hardware Arm &amp; Disarm</span>
-              </span>
-              <span className={`text-[10px] font-black px-2 py-0.5 rounded border ${
-                isArmed
-                  ? 'bg-emerald-950/80 border-emerald-500 text-emerald-300 animate-pulse'
-                  : 'bg-slate-800 border-slate-700 text-slate-400'
-              }`}>
-                {isArmed ? 'VEHICLE ARMED' : 'VEHICLE DISARMED'}
-              </span>
+          <ControlModePanel
+            telemetry={telemetry}
+            connectionState={pixhawkState}
+            onArmClick={handleDedicatedArmClick}
+            onDisarmClick={handleDedicatedDisarmClick}
+            isArmingInProgress={isArming}
+            isDisarmingInProgress={isDisarming}
+          />
+
+          {/* Error Feedback if Arm Fails */}
+          {armFeedback && !isArmed && (
+            <div className="p-2.5 bg-rose-950/70 border border-rose-500/50 rounded-xl text-rose-300 text-xs flex items-center space-x-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
+              <span>{armFeedback}</span>
             </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {/* Standalone ARM Button */}
-              <button
-                onClick={handleDedicatedArmClick}
-                disabled={isArmed || isArming || isDisarming || !pixhawkState.isConnected}
-                className={`py-2.5 px-3 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center space-x-1.5 transition shadow-md ${
-                  isArmed
-                    ? 'bg-slate-800/60 border border-slate-700/50 text-slate-500 cursor-not-allowed'
-                    : isArming
-                    ? 'bg-amber-600 text-white animate-pulse cursor-wait'
-                    : pixhawkState.isConnected
-                    ? 'bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white shadow-emerald-600/30 cursor-pointer'
-                    : 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
-                }`}
-                title={!pixhawkState.isConnected ? 'Connect to flight controller first' : isArmed ? 'Vehicle already armed' : 'Send MAVLink ARM command'}
-              >
-                {isArming ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
-                    <span>ARMING...</span>
-                  </>
-                ) : isArmed ? (
-                  <>
-                    <CheckCircle className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
-                    <span>ARMED ✓</span>
-                  </>
-                ) : (
-                  <>
-                    <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
-                    <span>ARM</span>
-                  </>
-                )}
-              </button>
-
-              {/* Standalone DISARM Button */}
-              <button
-                onClick={handleDedicatedDisarmClick}
-                disabled={!isArmed || isArming || isDisarming || !pixhawkState.isConnected}
-                className={`py-2.5 px-3 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center space-x-1.5 transition shadow-md ${
-                  !isArmed
-                    ? 'bg-slate-800/60 border border-slate-700/50 text-slate-500 cursor-not-allowed'
-                    : isDisarming
-                    ? 'bg-amber-600 text-white animate-pulse cursor-wait'
-                    : pixhawkState.isConnected
-                    ? 'bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white shadow-rose-600/30 cursor-pointer'
-                    : 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
-                }`}
-                title={!pixhawkState.isConnected ? 'Connect to flight controller first' : !isArmed ? 'Vehicle is already disarmed' : 'Send MAVLink DISARM command'}
-              >
-                {isDisarming ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
-                    <span>DISARMING...</span>
-                  </>
-                ) : (
-                  <>
-                    <PowerOff className="w-3.5 h-3.5 shrink-0" />
-                    <span>DISARM</span>
-                  </>
-                )}
-              </button>
-            </div>
-
-            {/* Error Feedback if Arm Fails */}
-            {armFeedback && !isArmed && (
-              <div className="p-2 bg-rose-950/70 border border-rose-500/50 rounded-lg text-rose-300 text-[10px] flex items-center space-x-1.5">
-                <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-rose-400" />
-                <span>{armFeedback}</span>
-              </div>
-            )}
-          </div>
+          )}
         </div>
 
         {/* Right Column: Telemetry HUD & Tactical Map (lg: 7 cols) */}

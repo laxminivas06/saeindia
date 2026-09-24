@@ -60,6 +60,9 @@ export interface DroneTelemetry {
   flightMode: string;
   isArmed: boolean;
   vehicleState?: 'ARMED' | 'DISARMED' | 'ARMING' | 'DISARMING' | 'UNKNOWN';
+  controlMode?: 'RC' | 'NO_RC';
+  rcSignalDetected?: boolean;
+  rcRssi?: number;
   pixhawkConnected: boolean;
   cameraReady: boolean;
   runnerConnected?: boolean;

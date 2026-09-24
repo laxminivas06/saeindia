@@ -9,6 +9,7 @@ import { QRResultCard } from './QRResultCard';
 import { PixhawkMonitor } from './PixhawkMonitor';
 import { PixhawkConnectionCard } from './PixhawkConnectionCard';
 import { PreArmChecksPanel } from '../common/PreArmChecksPanel';
+import { ControlModePanel } from '../common/ControlModePanel';
 import { MissionTimer } from '../common/MissionTimer';
 import {
   Play,
@@ -180,159 +181,96 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
           />
         </div>
 
-        {/* Right: Master Flight Commands (ARM / DISARM, START MISSION, RTL) */}
-        <div className="md:col-span-6 flex flex-col justify-between space-y-2.5 bg-slate-900/90 p-3 sm:p-3.5 rounded-2xl border border-slate-800 shadow-xl">
+        {/* Right: Flight Control Interface (RC / NO-RC Mode, ARM/DISARM, D-Pad, Takeoff/Land) */}
+        <div className="md:col-span-6 space-y-3">
+          <ControlModePanel
+            telemetry={telemetry}
+            connectionState={pixhawkState}
+            onArmClick={handleArmClick}
+            onDisarmClick={handleDisarmClick}
+            isArmingInProgress={isArmingInProgress}
+            isDisarmingInProgress={isDisarmingInProgress}
+          />
 
-          {/* Action Header */}
-          <div className="flex items-center justify-between text-[11px] font-bold text-slate-400 uppercase tracking-wider pb-1 border-b border-slate-800/80">
-            <span className="flex items-center space-x-1.5">
-              <Shield className="w-3.5 h-3.5 text-sky-400" />
-              <span>Flight &amp; Mission Controls</span>
-            </span>
-            <span className={`px-2 py-0.5 rounded text-[10px] font-black border ${isArmed
-                ? 'bg-rose-950/80 border-rose-500 text-rose-300 animate-pulse'
-                : 'bg-slate-800 border-slate-700 text-slate-400'
-              }`}>
-              {isArmed ? 'MOTORS ARMED' : 'DISARMED / SAFE'}
-            </span>
-          </div>
-
-          {/* Primary Action Button Grid: ARM/DISARM + START MISSION + RTL */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-
-            {/* 1. RESTORED DEDICATED ARM / DISARM BUTTON */}
-            {!isArmed ? (
+          {/* Mission Start & RTL Bar */}
+          <div className="bg-slate-900/90 p-3 rounded-2xl border border-slate-800 shadow-lg space-y-2">
+            <div className="grid grid-cols-2 gap-2">
+              {/* START MISSION BUTTON */}
               <button
-                onClick={handleArmClick}
-                disabled={isArmingInProgress || !pixhawkState.isConnected}
-                className={`py-3 px-3 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center space-x-1.5 transition shadow-lg cursor-pointer ${isArmingInProgress
+                type="button"
+                onClick={handleStartMissionClick}
+                disabled={isMissionRunning || isMissionCompleted || !pixhawkState.isConnected}
+                className={`py-3 px-3 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center space-x-1.5 transition shadow-lg ${
+                  missionState === 'STARTING'
                     ? 'bg-amber-600 text-white animate-pulse'
-                    : pixhawkState.isConnected
-                      ? 'bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white shadow-emerald-600/30'
-                      : 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
-                  }`}
-                title="Send MAVLink ARM Command to Pixhawk FC"
-              >
-                {isArmingInProgress ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin shrink-0" />
-                    <span>ARMING...</span>
-                  </>
-                ) : (
-                  <>
-                    <ShieldCheck className="w-4 h-4 shrink-0" />
-                    <span>ARM</span>
-                  </>
-                )}
-              </button>
-            ) : (
-              <button
-                onClick={handleDisarmClick}
-                disabled={isDisarmingInProgress}
-                className="py-3 px-3 rounded-xl bg-rose-950 hover:bg-rose-900 border-2 border-rose-500 text-rose-200 font-black text-xs uppercase tracking-wider flex items-center justify-center space-x-1.5 shadow-lg shadow-rose-950/50 transition cursor-pointer"
-                title="Send MAVLink DISARM Command to Pixhawk FC"
-              >
-                {isDisarmingInProgress ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin shrink-0" />
-                    <span>DISARMING...</span>
-                  </>
-                ) : (
-                  <>
-                    <PowerOff className="w-4 h-4 shrink-0 text-rose-400" />
-                    <span>DISARM</span>
-                  </>
-                )}
-              </button>
-            )}
-
-            {/* 2. RESTORED DEDICATED START MISSION BUTTON */}
-            <button
-              onClick={handleStartMissionClick}
-              disabled={isMissionRunning || isMissionCompleted || !pixhawkState.isConnected}
-              className={`py-3 px-3 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center space-x-1.5 transition shadow-lg ${missionState === 'STARTING'
-                  ? 'bg-amber-600 text-white animate-pulse'
-                  : isMissionRunning
+                    : isMissionRunning
                     ? 'bg-sky-600 text-white shadow-sky-600/30 animate-pulse cursor-default'
                     : isMissionCompleted
-                      ? 'bg-emerald-800 text-emerald-200 border border-emerald-500 cursor-default'
-                      : isMissionAborted
-                        ? 'bg-rose-950 border border-rose-500 text-rose-300'
-                        : pixhawkState.isConnected
-                          ? 'bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white shadow-sky-600/30 cursor-pointer'
-                          : 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
+                    ? 'bg-emerald-800 text-emerald-200 border border-emerald-500 cursor-default'
+                    : isMissionAborted
+                    ? 'bg-rose-950 border border-rose-500 text-rose-300'
+                    : pixhawkState.isConnected
+                    ? 'bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white shadow-sky-600/30 cursor-pointer'
+                    : 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
                 }`}
-              title="Start Autonomous Search & QR Rescue Mission"
-            >
-              {missionState === 'STARTING' ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin shrink-0" />
-                  <span>STARTING...</span>
-                </>
-              ) : isMissionRunning ? (
-                <>
-                  <Activity className="w-4 h-4 shrink-0 animate-spin" />
-                  <span>MISSION RUNNING</span>
-                </>
-              ) : isMissionCompleted ? (
-                <>
-                  <CheckCircle className="w-4 h-4 shrink-0 text-emerald-300" />
-                  <span>COMPLETED</span>
-                </>
-              ) : isMissionAborted ? (
-                <>
-                  <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
-                  <span>MISSION FAILED</span>
-                </>
-              ) : (
-                <>
-                  <Play className="w-4 h-4 fill-current shrink-0" />
-                  <span>START MISSION</span>
-                </>
-              )}
-            </button>
-
-            {/* 3. EMERGENCY RTL (RETURN-TO-LAUNCH) */}
-            <button
-              onClick={onEmergencyRTL}
-              className="py-3 px-3 rounded-xl bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-black text-xs uppercase tracking-wider flex items-center justify-center space-x-1.5 shadow-lg shadow-rose-600/30 transition cursor-pointer"
-              title="Immediately abort mission and fly back to Home Point"
-            >
-              <RotateCcw className="w-4 h-4 shrink-0" />
-              <span>RTL (HOME)</span>
-            </button>
-          </div>
-
-          {/* Error Message Toast / Alert */}
-          {armError && (
-            <div className="p-2 bg-rose-950/90 border border-rose-500/80 rounded-lg text-rose-200 text-[11px] flex items-center justify-between space-x-2">
-              <div className="flex items-center space-x-1.5 min-w-0">
-                <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-                <span className="truncate">{armError}</span>
-              </div>
-              <button
-                onClick={() => setArmError(null)}
-                className="text-slate-400 hover:text-white text-xs shrink-0 cursor-pointer"
+                title="Start Autonomous Search & QR Rescue Mission"
               >
-                ✕
+                {missionState === 'STARTING' ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                    <span>STARTING...</span>
+                  </>
+                ) : isMissionRunning ? (
+                  <>
+                    <Activity className="w-4 h-4 shrink-0 animate-spin" />
+                    <span>MISSION RUNNING</span>
+                  </>
+                ) : isMissionCompleted ? (
+                  <>
+                    <CheckCircle className="w-4 h-4 shrink-0 text-emerald-300" />
+                    <span>COMPLETED</span>
+                  </>
+                ) : isMissionAborted ? (
+                  <>
+                    <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
+                    <span>MISSION FAILED</span>
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-4 h-4 fill-current shrink-0" />
+                    <span>START MISSION</span>
+                  </>
+                )}
+              </button>
+
+              {/* EMERGENCY RTL */}
+              <button
+                type="button"
+                onClick={onEmergencyRTL}
+                className="py-3 px-3 rounded-xl bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-black text-xs uppercase tracking-wider flex items-center justify-center space-x-1.5 shadow-lg shadow-rose-600/30 transition cursor-pointer"
+                title="Immediately abort mission and fly back to Home Point"
+              >
+                <RotateCcw className="w-4 h-4 shrink-0" />
+                <span>RTL (HOME)</span>
               </button>
             </div>
-          )}
 
-          {/* Quick Flight Mode Action Bar */}
-          <div className="flex items-center justify-between space-x-1 bg-slate-950 p-1 rounded-lg border border-slate-800 text-[10px]">
-            {(['GUIDED', 'AUTO', 'LOITER', 'RTL', 'LAND'] as const).map((mode) => (
-              <button
-                key={mode}
-                onClick={() => mavlinkService.setFlightMode(mode)}
-                className={`px-2 py-1 rounded font-bold transition flex-1 text-center cursor-pointer ${telemetry.flightMode === mode
-                    ? 'bg-sky-600 text-white shadow'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                  }`}
-              >
-                {mode}
-              </button>
-            ))}
+            {/* Error Message Toast / Alert */}
+            {armError && (
+              <div className="p-2 bg-rose-950/90 border border-rose-500/80 rounded-lg text-rose-200 text-[11px] flex items-center justify-between space-x-2">
+                <div className="flex items-center space-x-1.5 min-w-0">
+                  <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                  <span className="truncate">{armError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setArmError(null)}
+                  className="text-slate-400 hover:text-white text-xs shrink-0 cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>

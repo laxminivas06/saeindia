@@ -928,6 +928,25 @@ class MAVLinkService {
         break;
       }
 
+      // RC_CHANNELS_RAW (msgId = 35) & RC_CHANNELS (msgId = 65)
+      case 35:
+      case 65: {
+        if (payload.length >= 8) {
+          const ch1 = view.getUint16(4, true);
+          const ch2 = view.getUint16(6, true);
+          const ch3 = payload.length >= 10 ? view.getUint16(8, true) : 0;
+          const ch4 = payload.length >= 12 ? view.getUint16(10, true) : 0;
+          const rssi = payload.length >= 22 ? view.getUint8(21) : 0;
+          const hasValidSignals = ch1 >= 850 && ch1 <= 2150 && ch3 >= 850 && ch3 <= 2150;
+          this.telemetry.rcSignalDetected = hasValidSignals;
+          this.connectionState.rcSignalDetected = hasValidSignals;
+          this.telemetry.rcRssi = rssi;
+          this.connectionState.rcRssi = rssi;
+          this.notifyTelemetry();
+        }
+        break;
+      }
+
       // COMMAND_ACK (msgId = 77)
       case 77: {
         if (payload.length >= 3) {
@@ -939,7 +958,7 @@ class MAVLinkService {
           const resultName = resultNames[result] || `CODE_${result}`;
           const resText = `Command ${command} ACK: ${resultName}${resultParam2 ? ` (param2=${resultParam2})` : ''}`;
           
-          console.log(`[MAVLINK ACK]\nCOMMAND = ${command}\nRESULT = ${resultName} (${result})`);
+          console.log(`[MAVLINK ACK]\ncommand = ${command}\nresult = ${resultName} (${result})`);
 
           const ackObj = {
             command,
@@ -975,6 +994,22 @@ class MAVLinkService {
     }
   }
 
+  private currentControlMode: 'RC' | 'NO_RC' = 'NO_RC';
+
+  public getControlMode(): 'RC' | 'NO_RC' {
+    return this.currentControlMode;
+  }
+
+  public setControlMode(mode: 'RC' | 'NO_RC') {
+    if (this.currentControlMode === mode) return;
+    console.log(`[CONTROL MODE] Switched to: ${mode}`);
+    this.currentControlMode = mode;
+    this.telemetry.controlMode = mode;
+    this.connectionState.controlMode = mode;
+    this.notifyTelemetry();
+    this.notifyConnection();
+  }
+
   public async requestMavlinkDataStreams() {
     await this.sendMavlinkCommandLong(511 /* MAV_CMD_SET_MESSAGE_INTERVAL */, 0 /* HEARTBEAT */, 1000000 /* 1Hz */);
     await this.sendMavlinkCommandLong(511, 1 /* SYS_STATUS */, 200000 /* 5Hz */);
@@ -1000,8 +1035,8 @@ class MAVLinkService {
     const targetSys = this.connectionState.systemId || 1;
     const targetComp = this.connectionState.componentId || 1;
 
-    console.log(`[ARM] TARGET SYSID = ${targetSys}`);
-    console.log(`[ARM] TARGET COMP = ${targetComp}`);
+    console.log(`[ARM] SYSID = ${targetSys}`);
+    console.log(`[ARM] COMPONENT = ${targetComp}`);
     console.log('[ARM] COMMAND = 400');
     console.log('[ARM] PARAM1 = 1');
     console.log('[ARM] PARAM2 = 0');
@@ -1055,8 +1090,8 @@ class MAVLinkService {
     const targetSys = this.connectionState.systemId || 1;
     const targetComp = this.connectionState.componentId || 1;
 
-    console.log(`[DISARM] TARGET SYSID = ${targetSys}`);
-    console.log(`[DISARM] TARGET COMP = ${targetComp}`);
+    console.log(`[DISARM] SYSID = ${targetSys}`);
+    console.log(`[DISARM] COMPONENT = ${targetComp}`);
     console.log('[DISARM] COMMAND = 400');
     console.log('[DISARM] PARAM1 = 0');
     console.log('[DISARM] PARAM2 = 0');
@@ -1209,6 +1244,32 @@ class MAVLinkService {
     }
   }
 
+  public async commandHold(): Promise<boolean> {
+    if (!this.connectionState.isConnected && !this.simInterval) {
+      this.logDiagnostic('ERROR', 'Cannot execute Hold: MAVLink not connected', 'error');
+      return false;
+    }
+    this.addStatusMessage('NOTICE', 5, 'Sending Position Hold (LOITER) Command...');
+    if (this.connectionState.isRealHardware) {
+      return await this.setFlightMode('LOITER');
+    } else {
+      this.telemetry.flightMode = 'LOITER';
+      this.notifyTelemetry();
+      return true;
+    }
+  }
+
+  public async commandManualMove(direction: 'FORWARD' | 'BACKWARD' | 'LEFT' | 'RIGHT' | 'HOLD'): Promise<boolean> {
+    if (!this.connectionState.isConnected && !this.simInterval) {
+      return false;
+    }
+    if (direction === 'HOLD') {
+      return await this.commandHold();
+    }
+    this.addStatusMessage('INFO', 6, `Manual Directional Control: ${direction}`);
+    return true;
+  }
+
   private async sendMavlinkCommandLong(
     command: number,
     param1: number = 0,
@@ -1243,6 +1304,7 @@ class MAVLinkService {
     const prefix = command === 400 ? (param1 === 1.0 ? '[ARM]' : '[DISARM]') : `[CMD_${command}]`;
 
     if (command === 400) {
+      console.log(`${prefix} MAVLINK PACKET CREATED`);
       console.log(`${prefix} PACKET LENGTH = ${packet.length}`);
       console.log(`${prefix} PACKET HEX = ${hexDump}`);
       console.log(`${prefix} WS SEND START`);
