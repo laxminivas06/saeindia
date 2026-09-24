@@ -13,11 +13,20 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
   private currentPort: number = 8080;
   private currentProtocol: 'ws' | 'wss' = 'ws';
   private currentBaudRate: number = 57600;
+  
   private isConnecting: boolean = false;
-  private bytesReceived: number = 0;
-  private bytesSent: number = 0;
-  private lastPacketTimestamp: number = 0;
+  private manualDisconnect: boolean = false;
+  
+  // Reconnect management
+  private reconnectAttempts: number = 0;
+  private readonly maxReconnectAttempts: number = 5;
+  private reconnectTimer: any = null;
   private connectTimeoutTimer: any = null;
+
+  // Cumulative Metrics
+  private cumulativeRxBytes: number = 0;
+  private cumulativeTxBytes: number = 0;
+  private lastPacketTimestamp: number = 0;
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -73,6 +82,42 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
     }
   }
 
+  /**
+   * HTTP ping check to test if ESP32 web server is reachable on LAN
+   */
+  public async checkEsp32Http(host?: string): Promise<{ reachable: boolean; latencyMs?: number; message?: string }> {
+    const targetHost = host ? host.trim() : this.currentHost;
+    const testUrl = `http://${targetHost}/`;
+    const startTime = Date.now();
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2500);
+
+      const resp = await fetch(testUrl, {
+        method: 'GET',
+        mode: 'no-cors', // Avoid CORS preflight block for simple ping
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
+      const latencyMs = Date.now() - startTime;
+      return {
+        reachable: true,
+        latencyMs,
+        message: `ESP32 reachable at ${targetHost} (${latencyMs}ms)`
+      };
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        return { reachable: false, message: `ESP32 at ${targetHost} timed out (2.5s). Ensure phone/laptop is on same Wi-Fi.` };
+      }
+      return { reachable: false, message: `Could not reach http://${targetHost}/: ${err.message || 'Host unreachable'}` };
+    }
+  }
+
+  /**
+   * Connect to ESP32 WebSocket server (Zero duplicate sockets guaranteed)
+   */
   public async connect(options?: { host?: string; port?: number; protocol?: 'ws' | 'wss'; baudRate?: number }): Promise<boolean> {
     if (!this.isAvailable()) {
       this.notifyState({
@@ -88,8 +133,13 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
     if (options?.baudRate) this.currentBaudRate = options.baudRate;
     this.setConfig(this.currentHost, this.currentPort, this.currentProtocol, this.currentBaudRate);
 
-    // Clean up any active socket
-    await this.disconnect();
+    // Reset manual disconnect flag on explicit connect
+    this.manualDisconnect = false;
+    this.reconnectAttempts = 0;
+    this.clearAllTimers();
+
+    // Clean up any existing socket before opening a new one
+    this.cleanupSocket(false);
 
     const isHttpsOrigin = typeof window !== 'undefined' && window.location.protocol === 'https:';
     const wsUrl = `${this.currentProtocol}://${this.currentHost}:${this.currentPort}`;
@@ -102,20 +152,18 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
       });
 
       // 6-second timeout watchdog
-      if (this.connectTimeoutTimer) clearTimeout(this.connectTimeoutTimer);
       this.connectTimeoutTimer = setTimeout(() => {
         if (this.isConnecting && (!this.socket || this.socket.readyState !== WebSocket.OPEN)) {
           this.isConnecting = false;
-          if (this.socket) {
-            try { this.socket.close(); } catch (e) { /* ignore */ }
-            this.socket = null;
-          }
+          this.cleanupSocket(false);
+
           const mixedContentHint = isHttpsOrigin && this.currentProtocol === 'ws'
-            ? ' Note: HTTPS browser security blocks plain ws:// connections to local IPs.'
+            ? ' Note: HTTPS browser security blocks plain ws:// connections to local IPs. Use http:// origin or native Android build.'
             : '';
+          
           this.notifyState({
             phase: 'SERIAL_OPEN_FAILED',
-            message: `Connection to ESP32-S3 (${wsUrl}) timed out.${mixedContentHint} Verify Wi-Fi network and ESP32 IP.`,
+            message: `Connection to ESP32-S3 (${wsUrl}) timed out.${mixedContentHint} Check ESP32 IP and ensure both devices are on the same Wi-Fi.`,
             error: 'WebSocket connection timeout'
           });
           resolve(false);
@@ -128,11 +176,13 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
         this.socket = socket;
 
         socket.onopen = () => {
-          if (this.connectTimeoutTimer) clearTimeout(this.connectTimeoutTimer);
+          this.clearAllTimers();
           this.isConnecting = false;
+          this.reconnectAttempts = 0;
+
           this.notifyState({
             phase: 'SERIAL_OPEN',
-            message: `Connected to ESP32-S3 (${wsUrl}) ✓. Waiting for Pixhawk MAVLink Heartbeat...`,
+            message: `Connected to ESP32-S3 (${wsUrl}) ✓. Waiting for Pixhawk MAVLink Heartbeat…`,
             device: {
               deviceName: `ESP32-S3 Wireless Bridge (${this.currentHost}:${this.currentPort})`,
               productName: `ESP32-S3 TELEM2 MAVLink WebSocket (${this.currentBaudRate} baud)`,
@@ -147,38 +197,37 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
 
         socket.onmessage = (event: MessageEvent) => {
           this.lastPacketTimestamp = Date.now();
-          let chunk: Uint8Array;
+          
           if (event.data instanceof ArrayBuffer) {
-            chunk = new Uint8Array(event.data);
+            const chunk = new Uint8Array(event.data);
+            this.cumulativeRxBytes += chunk.length;
+            this.dataListeners.forEach((fn) => fn(chunk));
           } else if (event.data instanceof Blob) {
             const reader = new FileReader();
             reader.onload = () => {
               if (reader.result instanceof ArrayBuffer) {
-                const b = new Uint8Array(reader.result);
-                this.bytesReceived += b.length;
-                this.dataListeners.forEach((fn) => fn(b));
+                const chunk = new Uint8Array(reader.result);
+                this.cumulativeRxBytes += chunk.length;
+                this.dataListeners.forEach((fn) => fn(chunk));
               }
             };
             reader.readAsArrayBuffer(event.data);
-            return;
           } else if (typeof event.data === 'string') {
             const encoder = new TextEncoder();
-            chunk = encoder.encode(event.data);
-          } else {
-            return;
+            const chunk = encoder.encode(event.data);
+            this.cumulativeRxBytes += chunk.length;
+            this.dataListeners.forEach((fn) => fn(chunk));
           }
-
-          this.bytesReceived += chunk.length;
-          this.dataListeners.forEach((fn) => fn(chunk));
         };
 
         socket.onerror = (err: Event) => {
-          if (this.connectTimeoutTimer) clearTimeout(this.connectTimeoutTimer);
+          this.clearAllTimers();
           this.isConnecting = false;
+          
           const isSecurityIssue = isHttpsOrigin && this.currentProtocol === 'ws';
           const errMsg = isSecurityIssue
-            ? `Browser blocked ws:// on HTTPS origin (Mixed Content Security). Use Android App or http:// local connection.`
-            : `WebSocket connection to ${wsUrl} failed. Verify phone is on same Wi-Fi as ESP32 (${this.currentHost}).`;
+            ? `Browser blocked ws:// on HTTPS origin (Mixed Content Security). Open Ground Station on http:// origin or Android native app.`
+            : `WebSocket connection to ${wsUrl} failed. Ensure device and ESP32 are connected to the same Wi-Fi.`;
 
           this.notifyState({
             phase: 'SERIAL_OPEN_FAILED',
@@ -189,17 +238,46 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
         };
 
         socket.onclose = (event: CloseEvent) => {
-          if (this.connectTimeoutTimer) clearTimeout(this.connectTimeoutTimer);
+          this.clearAllTimers();
           this.isConnecting = false;
           this.socket = null;
-          this.notifyState({
-            phase: 'DISCONNECTED',
-            message: event.wasClean ? 'ESP32-S3 bridge disconnected.' : 'ESP32-S3 connection closed unexpectedly.'
-          });
+
+          // If manually disconnected by user, do NOT reconnect
+          if (this.manualDisconnect) {
+            this.notifyState({
+              phase: 'DISCONNECTED',
+              message: 'ESP32-S3 bridge disconnected by user.'
+            });
+            return;
+          }
+
+          // Unexpected disconnect - attempt controlled reconnect
+          if (this.reconnectAttempts < this.maxReconnectAttempts) {
+            this.reconnectAttempts++;
+            const delays = [1000, 2000, 3000, 5000, 10000];
+            const delay = delays[this.reconnectAttempts - 1] || 5000;
+
+            this.notifyState({
+              phase: 'WAITING_FOR_MAVLINK',
+              message: `ESP32 connection lost. Reconnecting (${this.reconnectAttempts}/${this.maxReconnectAttempts}) in ${delay / 1000}s…`
+            });
+
+            this.reconnectTimer = setTimeout(() => {
+              if (!this.manualDisconnect) {
+                this.connect();
+              }
+            }, delay);
+          } else {
+            this.notifyState({
+              phase: 'CONNECTION_LOST',
+              message: `ESP32-S3 connection failed after ${this.maxReconnectAttempts} attempts. Press CONNECT to retry.`,
+              error: 'Max reconnect attempts exceeded'
+            });
+          }
         };
 
       } catch (err: any) {
-        if (this.connectTimeoutTimer) clearTimeout(this.connectTimeoutTimer);
+        this.clearAllTimers();
         this.isConnecting = false;
         this.notifyState({
           phase: 'SERIAL_OPEN_FAILED',
@@ -211,36 +289,67 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
     });
   }
 
+  /**
+   * CRITICAL: Rock-solid disconnect. Immediately closes socket, cancels reconnects,
+   * sets manualDisconnect=true, and resets state to DISCONNECTED.
+   */
   public async disconnect(): Promise<void> {
-    if (this.connectTimeoutTimer) {
-      clearTimeout(this.connectTimeoutTimer);
-      this.connectTimeoutTimer = null;
-    }
+    this.manualDisconnect = true;
+    this.reconnectAttempts = 0;
     this.isConnecting = false;
+    this.clearAllTimers();
+
+    this.cleanupSocket(true);
+
+    this.notifyState({
+      phase: 'DISCONNECTED',
+      message: 'ESP32-S3 bridge disconnected.'
+    });
+  }
+
+  private cleanupSocket(isManual: boolean) {
     if (this.socket) {
       try {
-        this.socket.close();
+        // Remove listeners to prevent race-condition triggers
+        this.socket.onopen = null;
+        this.socket.onmessage = null;
+        this.socket.onerror = null;
+        this.socket.onclose = null;
+
+        if (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING) {
+          this.socket.close(1000, isManual ? 'User requested disconnect' : 'Cleaning up socket');
+        }
       } catch (e) {
         // ignore
       }
       this.socket = null;
     }
-    this.notifyState({
-      phase: 'DISCONNECTED',
-      message: 'ESP32-S3 bridge disconnected'
-    });
+  }
+
+  private clearAllTimers() {
+    if (this.connectTimeoutTimer) {
+      clearTimeout(this.connectTimeoutTimer);
+      this.connectTimeoutTimer = null;
+    }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
   }
 
   public async send(data: Uint8Array): Promise<boolean> {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      console.warn('[ARM] WebSocket is not OPEN (ReadyState: ' + (this.socket ? this.socket.readyState : 'null') + ')');
       return false;
     }
     try {
-      this.socket.send(data.buffer);
-      this.bytesSent += data.length;
+      const payload = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+      this.socket.send(payload);
+      console.log(`[ARM] WebSocket send() called (${data.length} bytes transmitted)`);
+      this.cumulativeTxBytes += data.length;
       return true;
     } catch (e) {
-      console.error('Failed to send MAVLink bytes over ESP32 WebSocket', e);
+      console.error('[ARM] Failed to send MAVLink bytes over WebSocket:', e);
       return false;
     }
   }
@@ -268,8 +377,10 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
       url: `${this.currentProtocol}://${this.currentHost}:${this.currentPort}`,
       readyState: this.socket ? this.socket.readyState : WebSocket.CLOSED,
       isConnecting: this.isConnecting,
-      bytesReceived: this.bytesReceived,
-      bytesSent: this.bytesSent,
+      manualDisconnect: this.manualDisconnect,
+      reconnectAttempts: this.reconnectAttempts,
+      bytesReceived: this.cumulativeRxBytes,
+      bytesSent: this.cumulativeTxBytes,
       lastPacketTimestamp: this.lastPacketTimestamp,
       lastPacketAgeMs: this.lastPacketTimestamp > 0 ? Date.now() - this.lastPacketTimestamp : null
     };

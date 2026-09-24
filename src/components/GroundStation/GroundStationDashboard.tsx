@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { DroneTelemetry, HomePoint, MissionState, PreFlightChecklist as ChecklistType } from '../../types/mission';
 import { PixhawkConnectionState } from '../../types/mavlink';
 import { RunnerLinkState } from '../../types/runner';
@@ -8,6 +8,7 @@ import { TelemetryHUD } from '../common/TelemetryHUD';
 import { StatusBadge } from '../common/StatusBadge';
 import { HomePointSetter } from './HomePointSetter';
 import { PreFlightChecklist } from './PreFlightChecklist';
+import { PreArmChecksPanel } from '../common/PreArmChecksPanel';
 import { TacticalMap } from './TacticalMap';
 import { PixhawkConnectionCard } from '../Drone/PixhawkConnectionCard';
 import { 
@@ -22,7 +23,9 @@ import {
   Zap, 
   Power,
   PowerOff,
-  ShieldCheck
+  ShieldCheck,
+  Loader2,
+  AlertTriangle
 } from 'lucide-react';
 
 interface GroundStationDashboardProps {
@@ -54,6 +57,10 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
   onStartMission,
   onEmergencyRTL
 }) => {
+  const [isArming, setIsArming] = useState(false);
+  const [isDisarming, setIsDisarming] = useState(false);
+  const [armFeedback, setArmFeedback] = useState<string | null>(null);
+
   const isMissionActive =
     missionState !== 'IDLE' &&
     missionState !== 'HOME_SET' &&
@@ -61,10 +68,94 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
     missionState !== 'MISSION_COMPLETE';
 
   const isDroneAirborne = telemetry.isArmed && telemetry.altitude > 1.0;
+  const isArmed = telemetry.isArmed;
+
+  // Authoritative state clearing: When FC telemetry confirms armed/disarmed state, clear transient states
+  useEffect(() => {
+    if (isArmed) {
+      setIsArming(false);
+      setArmFeedback(null);
+    } else {
+      setIsDisarming(false);
+    }
+  }, [isArmed]);
+
+  // Dedicated ARM Handler (MAV_CMD_COMPONENT_ARM_DISARM param1=1.0 param2=0.0)
+  const handleDedicatedArmClick = async () => {
+    if (!pixhawkState.isConnected) {
+      setArmFeedback('Flight controller not connected. Connect first.');
+      return;
+    }
+
+    setArmFeedback(null);
+    setIsArming(true);
+
+    const sent = await mavlinkService.sendArmCommand();
+    if (!sent) {
+      setIsArming(false);
+      setArmFeedback('Arm command transmission failed: Check connection.');
+      return;
+    }
+
+    // Awaiting COMMAND_ACK and HEARTBEAT confirmation
+    const startWait = Date.now();
+    const watchdog = setInterval(() => {
+      if (mavlinkService.getTelemetry().isArmed) {
+        setIsArming(false);
+        setArmFeedback(null);
+        clearInterval(watchdog);
+      } else if (Date.now() - startWait > 4500) {
+        setIsArming(false);
+        clearInterval(watchdog);
+        if (!mavlinkService.getTelemetry().isArmed) {
+          const lastAck = pixhawkState.lastArmCommandAck;
+          if (lastAck && lastAck.result !== 0) {
+            const preArmReason = pixhawkState.preArmFailReason || 
+              (pixhawkState.statusHistory && pixhawkState.statusHistory.length > 0 ? pixhawkState.statusHistory[0].text : undefined);
+            let failMsg = `ARM REJECTED (${lastAck.resultName})`;
+            if (preArmReason) failMsg += ` — ${preArmReason}`;
+            setArmFeedback(failMsg);
+          } else {
+            setArmFeedback('ARM ACK TIMEOUT (Waiting for vehicle armed state)');
+          }
+        }
+      }
+    }, 250);
+  };
+
+  // Dedicated DISARM Handler (MAV_CMD_COMPONENT_ARM_DISARM param1=0.0 param2=0.0)
+  const handleDedicatedDisarmClick = async () => {
+    if (!pixhawkState.isConnected) {
+      setArmFeedback('Flight controller not connected. Connect first.');
+      return;
+    }
+
+    setArmFeedback(null);
+    setIsDisarming(true);
+
+    const sent = await mavlinkService.sendDisarmCommand();
+    if (!sent) {
+      setIsDisarming(false);
+      setArmFeedback('Disarm command transmission failed: Check connection.');
+      return;
+    }
+
+    const startWait = Date.now();
+    const watchdog = setInterval(() => {
+      if (!mavlinkService.getTelemetry().isArmed) {
+        setIsDisarming(false);
+        setArmFeedback(null);
+        clearInterval(watchdog);
+      } else if (Date.now() - startWait > 4500) {
+        setIsDisarming(false);
+        clearInterval(watchdog);
+      }
+    }, 250);
+  };
 
   return (
     <div className="p-3 sm:p-5 max-w-7xl mx-auto space-y-4 sm:space-y-5 font-mono">
-      {/* Top Pixhawk USB-OTG Connection Card */}
+      {/* Top Pixhawk USB-OTG & ESP32-S3 Connection Card */}
       <PixhawkConnectionCard connectionState={pixhawkState} />
 
       {/* Top Banner: Drone Status Indicator & Mission State */}
@@ -114,33 +205,8 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
             missionState={missionState}
           />
 
-          {/* Primary Action Button: ARM/DISARM + START MISSION + EMERGENCY RTL */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 font-mono">
-            {!telemetry.isArmed ? (
-              <button
-                onClick={() => mavlinkService.armDrone()}
-                disabled={!pixhawkState.isConnected}
-                className={`py-3.5 sm:py-4 px-3 rounded-xl font-black text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center space-x-2 transition shadow-lg cursor-pointer ${
-                  pixhawkState.isConnected
-                    ? 'bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white shadow-emerald-600/30'
-                    : 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
-                }`}
-                title="Arm Drone Motors"
-              >
-                <ShieldCheck className="w-4 h-4" />
-                <span>ARM</span>
-              </button>
-            ) : (
-              <button
-                onClick={() => mavlinkService.disarmDrone()}
-                className="py-3.5 sm:py-4 px-3 rounded-xl bg-rose-950 hover:bg-rose-900 border border-rose-500 text-rose-200 font-black text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center space-x-2 shadow-lg transition cursor-pointer"
-                title="Disarm Drone Motors"
-              >
-                <PowerOff className="w-4 h-4 text-rose-400" />
-                <span>DISARM</span>
-              </button>
-            )}
-
+          {/* Primary Action Button Grid: START MISSION + EMERGENCY RTL */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 font-mono">
             <button
               onClick={onStartMission}
               disabled={!isReadyForMission || isMissionActive}
@@ -171,11 +237,103 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
             disabled={isMissionActive}
           />
 
-          {/* Pre-Flight Checklist Card */}
-          <PreFlightChecklist
-            checklist={checklist}
+          {/* Mode-Aware Responsive Pre-Arm Checks & Validation Panel */}
+          <PreArmChecksPanel
+            connectionState={pixhawkState}
+            telemetry={telemetry}
+            homePoint={homePoint}
             isReady={isReadyForMission}
           />
+
+          {/* ========================================================================= */}
+          {/* DEDICATED STANDALONE ARM & DISARM BUTTONS (MAV_CMD 400)                   */}
+          {/* ========================================================================= */}
+          <div className="p-3 bg-slate-900/90 rounded-2xl border border-slate-800 space-y-2.5 shadow-lg">
+            <div className="flex items-center justify-between text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+              <span className="flex items-center space-x-1.5">
+                <ShieldCheck className="w-3.5 h-3.5 text-sky-400" />
+                <span>Pixhawk Hardware Arm &amp; Disarm</span>
+              </span>
+              <span className={`text-[10px] font-black px-2 py-0.5 rounded border ${
+                isArmed
+                  ? 'bg-emerald-950/80 border-emerald-500 text-emerald-300 animate-pulse'
+                  : 'bg-slate-800 border-slate-700 text-slate-400'
+              }`}>
+                {isArmed ? 'VEHICLE ARMED' : 'VEHICLE DISARMED'}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {/* Standalone ARM Button */}
+              <button
+                onClick={handleDedicatedArmClick}
+                disabled={isArmed || isArming || isDisarming || !pixhawkState.isConnected}
+                className={`py-2.5 px-3 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center space-x-1.5 transition shadow-md ${
+                  isArmed
+                    ? 'bg-slate-800/60 border border-slate-700/50 text-slate-500 cursor-not-allowed'
+                    : isArming
+                    ? 'bg-amber-600 text-white animate-pulse cursor-wait'
+                    : pixhawkState.isConnected
+                    ? 'bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white shadow-emerald-600/30 cursor-pointer'
+                    : 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
+                }`}
+                title={!pixhawkState.isConnected ? 'Connect to flight controller first' : isArmed ? 'Vehicle already armed' : 'Send MAVLink ARM command'}
+              >
+                {isArming ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                    <span>ARMING...</span>
+                  </>
+                ) : isArmed ? (
+                  <>
+                    <CheckCircle className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
+                    <span>ARMED ✓</span>
+                  </>
+                ) : (
+                  <>
+                    <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+                    <span>ARM</span>
+                  </>
+                )}
+              </button>
+
+              {/* Standalone DISARM Button */}
+              <button
+                onClick={handleDedicatedDisarmClick}
+                disabled={!isArmed || isArming || isDisarming || !pixhawkState.isConnected}
+                className={`py-2.5 px-3 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center space-x-1.5 transition shadow-md ${
+                  !isArmed
+                    ? 'bg-slate-800/60 border border-slate-700/50 text-slate-500 cursor-not-allowed'
+                    : isDisarming
+                    ? 'bg-amber-600 text-white animate-pulse cursor-wait'
+                    : pixhawkState.isConnected
+                    ? 'bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white shadow-rose-600/30 cursor-pointer'
+                    : 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
+                }`}
+                title={!pixhawkState.isConnected ? 'Connect to flight controller first' : !isArmed ? 'Vehicle is already disarmed' : 'Send MAVLink DISARM command'}
+              >
+                {isDisarming ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                    <span>DISARMING...</span>
+                  </>
+                ) : (
+                  <>
+                    <PowerOff className="w-3.5 h-3.5 shrink-0" />
+                    <span>DISARM</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* Error Feedback if Arm Fails */}
+            {armFeedback && !isArmed && (
+              <div className="p-2 bg-rose-950/70 border border-rose-500/50 rounded-lg text-rose-300 text-[10px] flex items-center space-x-1.5">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-rose-400" />
+                <span>{armFeedback}</span>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Right Column: Telemetry HUD & Tactical Map (lg: 7 cols) */}

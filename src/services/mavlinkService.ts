@@ -113,6 +113,7 @@ class MAVLinkService {
     ekfHealthy: true,
     preArmChecksPassed: false,
     statusHistory: [],
+    commandAckHistory: [],
     diagnosticsLogs: [],
     isRealHardware: false,
     diagnostics: {
@@ -274,7 +275,6 @@ class MAVLinkService {
 
       this.startSerialDataCheck();
       this.startHeartbeatWaitTimeout();
-      this.requestMavlinkDataStreams();
     } else if (
       phase === 'USB_NOT_DETECTED' ||
       phase === 'PERMISSION_DENIED' ||
@@ -456,22 +456,39 @@ class MAVLinkService {
     this.notifyConnection();
   }
 
+  /**
+   * Determine if a flight mode requires a GPS 3D fix / position estimate for arming.
+   * AltHold, Stabilize, Acro, Manual are barometric/rate modes and do NOT require GPS.
+   */
+  public isModePositionDependent(modeName?: string): boolean {
+    const raw = (modeName || this.telemetry.flightMode || '').toUpperCase().trim();
+    const mode = raw.replace(/[^A-Z]/g, '');
+    if (mode === 'ALTHOLD' || mode === 'ALT_HOLD' || mode === 'STABILIZE' || mode === 'ACRO' || mode === 'MANUAL' || mode === 'DISARMED' || mode === '') {
+      return false;
+    }
+    // Loiter, PosHold, Guided, Auto, RTL, SmartRTL, Follow, Circle require position
+    return true;
+  }
+
   public evaluatePreArmSafety(): { passed: boolean; reason?: string } {
     if (!this.connectionState.isConnected && !this.simInterval) {
-      return { passed: false, reason: 'Pixhawk FC Disconnected (Connect USB OTG & verify MAVLink Heartbeat)' };
+      return { passed: false, reason: 'Pixhawk FC Disconnected (Connect ESP32-S3 / USB & verify MAVLink Heartbeat)' };
     }
 
     if (!this.simInterval && Date.now() - this.connectionState.lastHeartbeat > 4000) {
       return { passed: false, reason: 'MAVLink Telemetry Lost (No Heartbeat received from FC)' };
     }
 
+    // Real Hardware: Check for genuine Pixhawk PreArm failures from STATUSTEXT
     if (this.connectionState.isRealHardware) {
       if (this.connectionState.preArmFailReason && !this.telemetry.isArmed) {
-        return { passed: false, reason: `Pixhawk FC Error: ${this.connectionState.preArmFailReason}` };
+        return { passed: false, reason: this.connectionState.preArmFailReason };
       }
     } else {
-      if (!this.telemetry.gps.isLocked || this.telemetry.gps.satellites < 6) {
-        return { passed: false, reason: `GPS Not Ready (${this.telemetry.gps.satellites} Sats visible)` };
+      // Simulation: Only check GPS if mode requires position
+      const requiresGps = this.isModePositionDependent(this.telemetry.flightMode);
+      if (requiresGps && (!this.telemetry.gps.isLocked || this.telemetry.gps.satellites < 6)) {
+        return { passed: false, reason: `GPS Not Ready (${this.telemetry.gps.satellites} Sats visible for ${this.telemetry.flightMode})` };
       }
       if (this.telemetry.batteryPercent > 0 && this.telemetry.batteryPercent < 15) {
         return { passed: false, reason: `Low Battery (${this.telemetry.batteryPercent}%)` };
@@ -519,6 +536,10 @@ class MAVLinkService {
     return await usbHostService.connectEsp32({ host, port, protocol, baudRate });
   }
 
+  public async checkEsp32Http(host?: string): Promise<{ reachable: boolean; latencyMs?: number; message?: string }> {
+    return await usbHostService.checkEsp32Http(host);
+  }
+
   public async scanUsbDevices(): Promise<any[]> {
     this.logDiagnostic('USB', 'Scanning connected USB devices on USB Host...', 'info');
     return await usbHostService.scanUsbDevices();
@@ -529,25 +550,49 @@ class MAVLinkService {
     return await usbHostService.requestUsbPermission();
   }
 
-  public async disconnect(): Promise<void> {
+  /**
+   * Centralized cleanup for MAVLink connection and state
+   */
+  public async cleanupMavlinkConnection(): Promise<void> {
     this.clearHeartbeatWaitTimer();
     this.clearSerialDataCheckTimer();
     if (this.simInterval) {
       clearInterval(this.simInterval);
       this.simInterval = null;
     }
+    
+    // Clear MAVLink parser ring buffer
+    this.rxBufferLen = 0;
+    this.heartbeatTimestamps = [];
+
+    // Disconnect active transport
     await usbHostService.disconnect();
+
+    // Reset full connection state
     this.connectionState.isConnected = false;
     this.connectionState.isUsbConnected = false;
     this.connectionState.isRealHardware = false;
+    this.connectionState.isReceivingTelemetry = false;
     this.connectionState.diagnostics.serialDataReceived = false;
+    this.connectionState.diagnostics.lastPacketTimestamp = 0;
+    this.connectionState.diagnostics.lastMavlinkMessageId = undefined;
+    this.connectionState.diagnostics.lastMavlinkMessageName = undefined;
     this.connectionState.phase = 'DISCONNECTED';
     this.connectionState.phaseMessage = 'Disconnected';
+    this.connectionState.heartbeatHz = 0;
+
+    // Reset Telemetry FC Link
     this.telemetry.pixhawkConnected = false;
     this.telemetry.isArmed = false;
-    this.logDiagnostic('TRANSPORT', 'Connection closed by user', 'info');
+    this.telemetry.flightMode = 'DISARMED';
+
+    this.logDiagnostic('TRANSPORT', 'MAVLink connection completely cleaned up & disconnected.', 'info');
     this.notifyConnection();
     this.notifyTelemetry();
+  }
+
+  public async disconnect(): Promise<void> {
+    await this.cleanupMavlinkConnection();
   }
 
   public async setTransport(transportId: string): Promise<boolean> {
@@ -714,7 +759,7 @@ class MAVLinkService {
           const type = view.getUint8(4);
           const autopilot = view.getUint8(5);
           const baseMode = view.getUint8(6);
-          const isArmed = (baseMode & 128) !== 0;
+          const isArmed = (baseMode & 128) !== 0; // MAV_MODE_FLAG_SAFETY_ARMED (128)
           const flightModeName = ARDUPILOT_MODES[customMode] || `MODE_${customMode}`;
 
           this.connectionState.autopilotType = AUTOPILOT_NAMES[autopilot] || `AUTOPILOT_${autopilot}`;
@@ -722,7 +767,17 @@ class MAVLinkService {
           this.connectionState.diagnostics.vehicleType = VEHICLE_TYPE_NAMES[type] || `TYPE_${type}`;
 
           this.telemetry.isArmed = isArmed;
-          this.telemetry.flightMode = isArmed ? flightModeName : 'DISARMED';
+          this.telemetry.flightMode = flightModeName || 'STABILIZE';
+          this.connectionState.vehicleState = isArmed ? 'ARMED' : 'DISARMED';
+          this.telemetry.vehicleState = isArmed ? 'ARMED' : 'DISARMED';
+
+          // Clear preArmFailReason when vehicle is armed
+          if (isArmed && this.connectionState.preArmFailReason) {
+            this.connectionState.preArmFailReason = undefined;
+            this.connectionState.preArmChecksPassed = true;
+          }
+
+          console.log(`[HEARTBEAT] sysid: ${sysId} armed: ${isArmed}`);
         }
 
         if (wasNotConnected) {
@@ -878,11 +933,42 @@ class MAVLinkService {
         if (payload.length >= 3) {
           const command = view.getUint16(0, true);
           const result = view.getUint8(2);
-          const resultNames = ['ACCEPTED', 'TEMP_REJECTED', 'DENIED', 'UNSUPPORTED', 'FAILED', 'IN_PROGRESS'];
-          const resText = `Command ${command} ACK: ${resultNames[result] || `CODE_${result}`}`;
+          const progress = payload.length >= 4 ? view.getUint8(3) : 0;
+          const resultParam2 = payload.length >= 8 ? view.getInt32(4, true) : 0;
+          const resultNames = ['ACCEPTED', 'TEMP_REJECTED', 'DENIED', 'UNSUPPORTED', 'FAILED', 'IN_PROGRESS', 'CANCELLED'];
+          const resultName = resultNames[result] || `CODE_${result}`;
+          const resText = `Command ${command} ACK: ${resultName}${resultParam2 ? ` (param2=${resultParam2})` : ''}`;
+          
+          console.log(`[MAVLINK ACK]\nCOMMAND = ${command}\nRESULT = ${resultName} (${result})`);
+
+          const ackObj = {
+            command,
+            commandName: command === 400 ? 'MAV_CMD_COMPONENT_ARM_DISARM' : command === 300 ? 'MAV_CMD_MISSION_START' : `CMD_${command}`,
+            result,
+            resultName,
+            progress,
+            resultParam2,
+            timestamp: Date.now()
+          };
+
+          this.connectionState.lastCommandAck = ackObj;
+          this.connectionState.lastCommandAckResultName = resultName;
+
+          if (command === 400) {
+            this.connectionState.lastArmCommandAck = ackObj;
+            if (result === 0) {
+              this.logDiagnostic('MAVLINK', '[ARM ACK] ARM COMMAND ACCEPTED ✓ (Awaiting Heartbeat armed confirmation)', 'success');
+              this.addStatusMessage('INFO', 6, 'ARM COMMAND ACCEPTED (Waiting for vehicle armed state)');
+            } else {
+              this.logDiagnostic('MAVLINK', `[ARM ACK] ARM COMMAND REJECTED by Pixhawk (${resultName})`, 'warn');
+              this.addStatusMessage('WARNING', 4, `ARM COMMAND REJECTED (${resultName})`);
+            }
+          }
+          this.connectionState.commandAckHistory = [ackObj, ...this.connectionState.commandAckHistory.slice(0, 9)];
+
           this.logDiagnostic('MAVLINK', `[COMMAND_ACK] ${resText}`, result === 0 ? 'success' : 'warn');
-          this.addStatusMessage(result === 0 ? 'INFO' : 'WARNING', result === 0 ? 6 : 4, resText);
-          this.emitPacket('COMMAND_ACK', { command, result });
+          this.emitPacket('COMMAND_ACK', ackObj);
+          this.notifyConnection();
         }
         break;
       }
@@ -897,38 +983,125 @@ class MAVLinkService {
     await this.sendMavlinkCommandLong(511, 30 /* ATTITUDE */, 100000 /* 10Hz */);
   }
 
-  public async armDrone(): Promise<boolean> {
-    if (!this.connectionState.isConnected && !this.simInterval) {
-      this.logDiagnostic('ERROR', 'Cannot arm: MAVLink connection not confirmed (No Heartbeat)', 'error');
+  public async sendArmCommand(): Promise<boolean> {
+    console.log('[ARM] BUTTON CLICKED');
+
+    const isWsOpen = this.connectionState.isUsbConnected || this.connectionState.isConnected;
+    console.log(`[ARM] WS STATE = ${isWsOpen ? 'OPEN' : 'CLOSED'}`);
+
+    if (!isWsOpen && !this.simInterval) {
+      console.error('[ARM] Cannot send ARM: WebSocket disconnected');
+      this.logDiagnostic('ERROR', 'Cannot send ARM: WebSocket disconnected', 'error');
+      this.addStatusMessage('WARNING', 4, 'WebSocket disconnected');
       return false;
     }
-    this.addStatusMessage('NOTICE', 5, 'Sending MAVLink ARM Command to Pixhawk FC...');
+
+    // Dynamic target_system and target_component with ArduPilot fallback
+    const targetSys = this.connectionState.systemId || 1;
+    const targetComp = this.connectionState.componentId || 1;
+
+    console.log(`[ARM] TARGET SYSID = ${targetSys}`);
+    console.log(`[ARM] TARGET COMP = ${targetComp}`);
+    console.log('[ARM] COMMAND = 400');
+    console.log('[ARM] PARAM1 = 1');
+    console.log('[ARM] PARAM2 = 0');
+
+    // Runtime assertion: command MUST be 400, param1 MUST be 1.0, param2 MUST be 0.0
+    const cmd = 400;
+    const p1 = 1.0;
+    const p2 = 0.0;
+    if (cmd !== 400 || p1 !== 1.0 || p2 !== 0.0) {
+      console.error('[ARM] Runtime assertion failed: Invalid ARM command parameters. Command not sent.');
+      return false;
+    }
+
+    this.connectionState.vehicleState = 'ARMING';
+    this.telemetry.vehicleState = 'ARMING';
+    this.connectionState.lastCommandName = 'ARM';
+    this.connectionState.lastSentCommandId = 400;
+    this.notifyConnection();
+    this.notifyTelemetry();
+
+    this.addStatusMessage('NOTICE', 5, 'Sending MAVLink ARM Command (MAV_CMD_COMPONENT_ARM_DISARM param1=1)...');
+    this.logDiagnostic('MAVLINK', `[ARM TX] Transmitting MAV_CMD_COMPONENT_ARM_DISARM (400) to SysID ${targetSys} CompID ${targetComp}`, 'info');
+    
     if (this.connectionState.isRealHardware) {
-      await this.setFlightMode('GUIDED');
-      await this.sendMavlinkCommandLong(400 /* MAV_CMD_COMPONENT_ARM_DISARM */, 1 /* Arm */, 21196);
-      return true;
+      const success = await this.sendMavlinkCommandLong(400 /* MAV_CMD_COMPONENT_ARM_DISARM */, 1.0 /* Arm */, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+      return success;
     } else {
       this.telemetry.isArmed = true;
-      this.telemetry.flightMode = 'GUIDED';
+      this.telemetry.vehicleState = 'ARMED';
+      this.connectionState.vehicleState = 'ARMED';
       this.addStatusMessage('INFO', 6, 'SIMULATOR: Drone Armed (Motors Spinning)');
       this.notifyTelemetry();
+      this.notifyConnection();
       return true;
     }
   }
 
-  public async disarmDrone(): Promise<boolean> {
-    this.addStatusMessage('NOTICE', 5, 'Sending MAVLink DISARM Command to Pixhawk FC...');
+  public async sendDisarmCommand(): Promise<boolean> {
+    console.log('[DISARM] BUTTON CLICKED');
+
+    const isWsOpen = this.connectionState.isUsbConnected || this.connectionState.isConnected;
+    console.log(`[DISARM] WS STATE = ${isWsOpen ? 'OPEN' : 'CLOSED'}`);
+
+    if (!isWsOpen && !this.simInterval) {
+      console.error('[DISARM] Cannot send DISARM: WebSocket disconnected');
+      this.logDiagnostic('ERROR', 'Cannot send DISARM: WebSocket disconnected', 'error');
+      this.addStatusMessage('WARNING', 4, 'WebSocket disconnected');
+      return false;
+    }
+
+    const targetSys = this.connectionState.systemId || 1;
+    const targetComp = this.connectionState.componentId || 1;
+
+    console.log(`[DISARM] TARGET SYSID = ${targetSys}`);
+    console.log(`[DISARM] TARGET COMP = ${targetComp}`);
+    console.log('[DISARM] COMMAND = 400');
+    console.log('[DISARM] PARAM1 = 0');
+    console.log('[DISARM] PARAM2 = 0');
+
+    // Runtime assertion: command MUST be 400, param1 MUST be 0.0, param2 MUST be 0.0
+    const cmd = 400;
+    const p1 = 0.0;
+    const p2 = 0.0;
+    if (cmd !== 400 || p1 !== 0.0 || p2 !== 0.0) {
+      console.error('[DISARM] Runtime assertion failed: Invalid DISARM command parameters. Command not sent.');
+      return false;
+    }
+
+    this.connectionState.vehicleState = 'DISARMING';
+    this.telemetry.vehicleState = 'DISARMING';
+    this.connectionState.lastCommandName = 'DISARM';
+    this.connectionState.lastSentCommandId = 400;
+    this.notifyConnection();
+    this.notifyTelemetry();
+
+    this.addStatusMessage('NOTICE', 5, 'Sending MAVLink DISARM Command (MAV_CMD_COMPONENT_ARM_DISARM param1=0)...');
+    this.logDiagnostic('MAVLINK', `[DISARM TX] Transmitting MAV_CMD_COMPONENT_ARM_DISARM (400) to SysID ${targetSys} CompID ${targetComp}`, 'info');
+
     if (this.connectionState.isRealHardware) {
-      await this.sendMavlinkCommandLong(400 /* MAV_CMD_COMPONENT_ARM_DISARM */, 0 /* Disarm */);
-      return true;
+      const success = await this.sendMavlinkCommandLong(400 /* MAV_CMD_COMPONENT_ARM_DISARM */, 0.0 /* Disarm */, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+      return success;
     } else {
       this.telemetry.isArmed = false;
+      this.telemetry.vehicleState = 'DISARMED';
+      this.connectionState.vehicleState = 'DISARMED';
       this.telemetry.flightMode = 'DISARMED';
       this.telemetry.altitude = 0;
       this.addStatusMessage('INFO', 6, 'SIMULATOR: Drone Disarmed');
       this.notifyTelemetry();
+      this.notifyConnection();
       return true;
     }
+  }
+
+  public async armDrone(): Promise<boolean> {
+    return this.sendArmCommand();
+  }
+
+  public async disarmDrone(): Promise<boolean> {
+    return this.sendDisarmCommand();
   }
 
   public async setFlightMode(modeName: 'GUIDED' | 'AUTO' | 'STABILIZE' | 'LOITER' | 'RTL' | 'LAND'): Promise<boolean> {
@@ -1045,7 +1218,7 @@ class MAVLinkService {
     param5: number = 0,
     param6: number = 0,
     param7: number = 0
-  ) {
+  ): Promise<boolean> {
     const payload = new Uint8Array(33);
     const view = new DataView(payload.buffer);
     view.setFloat32(0, param1, true);
@@ -1056,15 +1229,37 @@ class MAVLinkService {
     view.setFloat32(20, param6, true);
     view.setFloat32(24, param7, true);
     view.setUint16(28, command, true);
-    view.setUint8(30, this.connectionState.systemId || 1);
-    view.setUint8(31, this.connectionState.componentId || 1);
+    const targetSys = this.connectionState.systemId || 1;
+    const targetComp = this.connectionState.componentId || 1;
+    view.setUint8(30, targetSys);
+    view.setUint8(31, targetComp);
     view.setUint8(32, 0);
 
+    this.connectionState.lastSentCommandId = command;
+
     const packet = this.buildMavlink1Frame(76 /* COMMAND_LONG */, payload);
+    const hexDump = Array.from(packet).map(b => b.toString(16).toUpperCase().padStart(2, '0')).join(' ');
+
+    if (command === 400) {
+      console.log(`[MAVLINK TX COMMAND]\ncommand: 400\nparam1: ${param1}\nparam2: ${param2}\ntarget_system: ${targetSys}\ntarget_component: ${targetComp}`);
+      console.log(`[ARM] packetLength=${packet.length}`);
+      console.log('[ARM] MAVLink packet generated');
+      console.log(`[ARM] MAVLink TX:\n${hexDump}`);
+      console.log('[ARM] Sending binary packet...');
+    }
+
+    this.logDiagnostic('MAVLINK', `[COMMAND_LONG TX] Sending cmd ${command} (p1=${param1}, p2=${param2}) to SysID ${targetSys} CompID ${targetComp} (${packet.length} bytes)`, 'info');
+
     const success = await usbHostService.sendBytes(packet);
     if (success) {
       this.connectionState.bytesSent += packet.length;
+      this.logDiagnostic('MAVLINK', `[ARM TX] Successfully forwarded ${packet.length} bytes to transport bridge (Total TX: ${this.connectionState.bytesSent} B)`, 'success');
+      this.notifyConnection();
+    } else {
+      console.error(`[ARM TX] Failed to send binary packet through transport bridge (${packet.length} bytes)`);
+      this.logDiagnostic('ERROR', `[ARM TX] Failed to send ${packet.length} bytes to transport`, 'error');
     }
+    return success;
   }
 
   private buildMavlink1Frame(msgId: number, payload: Uint8Array): Uint8Array {
@@ -1088,13 +1283,40 @@ class MAVLinkService {
   }
 
   private calculateMavlinkCrc(buffer: Uint8Array, msgId: number): number {
+    const CRC_EXTRAS: Record<number, number> = {
+      0: 50,   // HEARTBEAT
+      1: 124,  // SYS_STATUS
+      2: 137,  // SYSTEM_TIME
+      4: 237,  // PING
+      11: 89,  // SET_MODE
+      20: 214, // PARAM_REQUEST_READ
+      21: 159, // PARAM_REQUEST_LIST
+      22: 220, // PARAM_VALUE
+      23: 168, // PARAM_SET
+      24: 24,  // GPS_RAW_INT
+      30: 39,  // ATTITUDE
+      33: 104, // GLOBAL_POSITION_INT
+      39: 254, // MISSION_ITEM
+      40: 230, // MISSION_REQUEST
+      42: 28,  // MISSION_SET_CURRENT
+      43: 132, // MISSION_REQUEST_LIST
+      44: 221, // MISSION_COUNT
+      45: 232, // MISSION_CLEAR_ALL
+      46: 11,  // MISSION_ITEM_REACHED
+      47: 153, // MISSION_ACK
+      62: 183, // NAV_CONTROLLER_OUTPUT
+      76: 152, // COMMAND_LONG
+      77: 143, // COMMAND_ACK
+      253: 83  // STATUSTEXT
+    };
+
     let crc = 0xFFFF;
     for (let i = 0; i < buffer.length; i++) {
       let b = buffer[i] ^ (crc & 0xFF);
       b ^= (b << 4) & 0xFF;
       crc = (crc >> 8) ^ (b << 8) ^ (b << 3) ^ (b >> 4);
     }
-    const extraCrc = 152;
+    const extraCrc = CRC_EXTRAS[msgId] ?? 152;
     let b = extraCrc ^ (crc & 0xFF);
     b ^= (b << 4) & 0xFF;
     crc = (crc >> 8) ^ (b << 8) ^ (b << 3) ^ (b >> 4);

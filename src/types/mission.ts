@@ -59,6 +59,7 @@ export interface DroneTelemetry {
   batteryCurrent?: number;
   flightMode: string;
   isArmed: boolean;
+  vehicleState?: 'ARMED' | 'DISARMED' | 'ARMING' | 'DISARMING' | 'UNKNOWN';
   pixhawkConnected: boolean;
   cameraReady: boolean;
   runnerConnected?: boolean;

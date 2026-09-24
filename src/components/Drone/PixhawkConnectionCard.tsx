@@ -28,7 +28,9 @@ import {
   Cable,
   ArrowRight,
   ShieldAlert,
-  Clock
+  Clock,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { SerialDiagnosticsModal } from './SerialDiagnosticsModal';
 
@@ -45,15 +47,18 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
 }) => {
   const [isConnecting, setIsConnecting] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
+  const [isCheckingEsp32, setIsCheckingEsp32] = useState(false);
+  const [esp32PingResult, setEsp32PingResult] = useState<{ reachable: boolean; latencyMs?: number; message?: string } | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [showEsp32Guide, setShowEsp32Guide] = useState(false);
+  const [showDevDetails, setShowDevDetails] = useState(false);
   const [selectedBaud, setSelectedBaud] = useState<number>(connectionState.baudRate || 57600);
   
   // Connection Mode: 'USB' | 'ESP32' | 'SIM'
   const [connectionMode, setConnectionMode] = useState<'USB' | 'ESP32' | 'SIM'>(() => {
     if (connectionState.connectionType === 'ESP32_WEBSOCKET') return 'ESP32';
     if (connectionState.connectionType === 'SIMULATED') return 'SIM';
-    return 'ESP32'; // Default to ESP32 wireless mode as requested
+    return 'ESP32'; // Default to ESP32 wireless mode
   });
 
   // ESP32 Settings
@@ -93,6 +98,23 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
   const isMavlinkHeartbeatReceived = isConnected && connectionState.lastHeartbeat > 0 && (Date.now() - connectionState.lastHeartbeat < 4500);
   const isHeartbeatTimeout = phase === 'HEARTBEAT_TIMEOUT' || phase === 'NO_MAVLINK_HEARTBEAT' || (isConnected && Date.now() - connectionState.lastHeartbeat > 4500);
   const isWaitingMavlink = (phase === 'WAITING_FOR_MAVLINK' || phase === 'WAITING_FOR_HEARTBEAT' || phase === 'SERIAL_OPEN') && !isConnected;
+
+  // Active Connection State per Mode
+  const isEsp32Active = connectionState.connectionType === 'ESP32_WEBSOCKET' && (
+    isUsbConnected || 
+    isConnected || 
+    phase === 'SERIAL_OPEN' || 
+    phase === 'WAITING_FOR_MAVLINK' || 
+    phase === 'WAITING_FOR_HEARTBEAT' ||
+    phase === 'HEARTBEAT_RECEIVED' ||
+    phase === 'PIXHAWK_CONNECTED' ||
+    phase === 'TELEMETRY_ACTIVE' ||
+    phase === 'MAVLINK_CONNECTED'
+  );
+
+  const isUsbActive = connectionState.connectionType === 'USB_SERIAL' && (
+    isUsbConnected || isConnected || phase === 'SERIAL_OPEN'
+  );
 
   const isUsbDetected = 
     phase !== 'DISCONNECTED' && 
@@ -155,6 +177,19 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
     }
   };
 
+  const handleCheckEsp32 = async () => {
+    setIsCheckingEsp32(true);
+    setEsp32PingResult(null);
+    try {
+      const result = await mavlinkService.checkEsp32Http(esp32Host.trim());
+      setEsp32PingResult(result);
+    } catch (e: any) {
+      setEsp32PingResult({ reachable: false, message: e.message || 'Check failed' });
+    } finally {
+      setIsCheckingEsp32(false);
+    }
+  };
+
   const handleRequestPermission = async () => {
     setIsConnecting(true);
     try {
@@ -165,6 +200,7 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
   };
 
   const handleDisconnect = async () => {
+    setIsConnecting(false);
     await mavlinkService.disconnect();
   };
 
@@ -173,6 +209,14 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
     if (isUsbConnected && connectionState.connectionType === 'USB_SERIAL') {
       mavlinkService.connectHardware(newBaud);
     }
+  };
+
+  // Format bytes helper
+  const formatBytes = (bytes: number) => {
+    if (!bytes || bytes === 0) return '0 B';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
   };
 
   // Format last packet age
@@ -209,6 +253,8 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
             }`}>
               {isEsp32Mode ? (
                 <Wifi className="w-4 h-4 sm:w-5 sm:h-5" />
+              ) : isSimulated ? (
+                <Cpu className="w-4 h-4 sm:w-5 sm:h-5" />
               ) : (
                 <Usb className="w-4 h-4 sm:w-5 sm:h-5" />
               )}
@@ -216,7 +262,7 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="text-xs sm:text-sm font-black uppercase text-white tracking-wider">
-                  {isEsp32Mode ? 'ESP32-S3 WIRELESS MAVLINK' : 'PIXHAWK USB OTG CONNECTION'}
+                  {isEsp32Mode ? 'ESP32-S3 WIRELESS MAVLINK' : isSimulated ? 'SITL BENCH SIMULATOR' : 'PIXHAWK USB OTG CONNECTION'}
                 </span>
                 
                 {/* Real-time Status Badge */}
@@ -324,16 +370,41 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                   Pixhawk TELEM2 ➔ ESP32-S3 Wi-Fi WebSocket Bridge
                 </span>
               </div>
-              <button
-                onClick={() => setShowEsp32Guide(true)}
-                className="text-[11px] text-purple-300 hover:text-purple-100 flex items-center space-x-1 underline cursor-pointer"
-              >
-                <HelpCircle className="w-3.5 h-3.5" />
-                <span>Wi-Fi Provisioning &amp; TELEM2 Wiring</span>
-              </button>
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={handleCheckEsp32}
+                  disabled={isCheckingEsp32}
+                  className="text-[11px] px-2 py-0.5 bg-purple-900/60 hover:bg-purple-800 text-purple-200 rounded border border-purple-500/40 flex items-center space-x-1 cursor-pointer"
+                >
+                  {isCheckingEsp32 ? <Loader2 className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3" />}
+                  <span>Check ESP32</span>
+                </button>
+                <button
+                  onClick={() => setShowEsp32Guide(true)}
+                  className="text-[11px] text-purple-300 hover:text-purple-100 flex items-center space-x-1 underline cursor-pointer"
+                >
+                  <HelpCircle className="w-3.5 h-3.5" />
+                  <span>Wiring Guide</span>
+                </button>
+              </div>
             </div>
 
-            {/* Input Controls Bar: IP, Port, Baud, Protocol, Connect */}
+            {/* Ping Feedback Banner */}
+            {esp32PingResult && (
+              <div className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between border ${
+                esp32PingResult.reachable
+                  ? 'bg-emerald-950/80 border-emerald-500/60 text-emerald-300'
+                  : 'bg-rose-950/80 border-rose-500/60 text-rose-300'
+              }`}>
+                <div className="flex items-center space-x-1.5">
+                  {esp32PingResult.reachable ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" /> : <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0" />}
+                  <span>{esp32PingResult.message}</span>
+                </div>
+                <button onClick={() => setEsp32PingResult(null)} className="text-[10px] text-slate-400 hover:text-white ml-2">✕</button>
+              </div>
+            )}
+
+            {/* Input Controls Bar: Protocol, IP, Port, Baud, Connect / Disconnect */}
             <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 text-xs items-center">
               
               {/* Protocol */}
@@ -388,34 +459,37 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                 </select>
               </div>
 
-              {/* Action Button: Connect / Disconnect */}
+              {/* Action Button: Connect / Connecting / Disconnect */}
               <div className="sm:col-span-2">
-                {!isConnected && connectionState.connectionType !== 'ESP32_WEBSOCKET' ? (
+                {isConnecting ? (
                   <button
-                    onClick={handleConnectEsp32}
-                    disabled={isConnecting}
-                    className="w-full py-2 bg-purple-600 hover:bg-purple-500 active:bg-purple-700 text-white rounded-lg text-xs font-black uppercase tracking-wide transition flex items-center justify-center space-x-1.5 shadow-lg shadow-purple-600/30 cursor-pointer"
+                    disabled
+                    className="w-full py-2 bg-purple-800 text-purple-200 rounded-lg text-xs font-black uppercase tracking-wide flex items-center justify-center space-x-1.5 opacity-80 cursor-not-allowed"
                   >
-                    {isConnecting ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    ) : (
-                      <Wifi className="w-3.5 h-3.5" />
-                    )}
-                    <span>CONNECT</span>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>CONNECTING...</span>
+                  </button>
+                ) : isEsp32Active ? (
+                  <button
+                    onClick={handleDisconnect}
+                    className="w-full py-2 bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white rounded-lg text-xs font-black uppercase tracking-wide transition flex items-center justify-center space-x-1.5 shadow-lg shadow-rose-600/30 cursor-pointer"
+                  >
+                    <PowerOff className="w-3.5 h-3.5" />
+                    <span>DISCONNECT</span>
                   </button>
                 ) : (
                   <button
-                    onClick={handleDisconnect}
-                    className="w-full py-2 bg-rose-950/80 hover:bg-rose-900 border border-rose-600 text-rose-300 rounded-lg text-xs font-bold transition flex items-center justify-center space-x-1 cursor-pointer"
+                    onClick={handleConnectEsp32}
+                    className="w-full py-2 bg-purple-600 hover:bg-purple-500 active:bg-purple-700 text-white rounded-lg text-xs font-black uppercase tracking-wide transition flex items-center justify-center space-x-1.5 shadow-lg shadow-purple-600/30 cursor-pointer"
                   >
-                    <PowerOff className="w-3.5 h-3.5" />
-                    <span>Disconnect</span>
+                    <Wifi className="w-3.5 h-3.5" />
+                    <span>CONNECT</span>
                   </button>
                 )}
               </div>
             </div>
 
-            {/* Live Connection Diagnostics Matrix (Section 7 & 17 Requirements) */}
+            {/* Live Connection Diagnostics Matrix */}
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2 pt-1 text-[10px]">
               
               {/* 1. ESP32 State */}
@@ -456,13 +530,13 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                 </div>
               </div>
 
-              {/* 5. RX / TX Bytes Counter */}
+              {/* 5. Cumulative RX / TX Bytes Counter */}
               <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800">
-                <div className="text-slate-400 uppercase font-bold">RX / TX Data</div>
-                <div className="font-bold text-slate-200 mt-0.5">
-                  <span className="text-emerald-400">{connectionState.bytesReceived} B</span>
+                <div className="text-slate-400 uppercase font-bold">RX / TX Cumulative</div>
+                <div className="font-bold text-slate-200 mt-0.5 truncate">
+                  <span className="text-emerald-400">{formatBytes(connectionState.bytesReceived)}</span>
                   <span className="text-slate-500"> / </span>
-                  <span className="text-sky-400">{connectionState.bytesSent} B</span>
+                  <span className="text-sky-400">{formatBytes(connectionState.bytesSent)}</span>
                 </div>
               </div>
 
@@ -475,24 +549,42 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
               </div>
             </div>
 
-            {/* HTTPS Mixed Content Alert (Section 16) */}
+            {/* Collapsible Developer Diagnostics Bar */}
+            <div className="pt-1">
+              <button
+                onClick={() => setShowDevDetails(!showDevDetails)}
+                className="text-[11px] text-purple-300 hover:text-purple-100 flex items-center space-x-1 cursor-pointer"
+              >
+                {showDevDetails ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                <span>{showDevDetails ? 'Hide Developer Diagnostics' : 'Show Developer Diagnostics (Section 28)'}</span>
+              </button>
+
+              {showDevDetails && (
+                <div className="mt-2 p-2.5 bg-slate-950 rounded-xl border border-slate-800 text-[11px] space-y-1 text-slate-300">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <div><strong className="text-slate-400">Transport:</strong> ESP32 WebSocket</div>
+                    <div><strong className="text-slate-400">URL:</strong> {esp32Proto}://{esp32Host}:{esp32Port}</div>
+                    <div><strong className="text-slate-400">WS State:</strong> {isWebSocketOpen ? 'OPEN (ReadyState 1)' : 'CLOSED (ReadyState 3)'}</div>
+                    <div><strong className="text-slate-400">SysID / CompID:</strong> {connectionState.systemId || '—'} / {connectionState.componentId || '—'}</div>
+                    <div><strong className="text-slate-400">RX Exact:</strong> {connectionState.bytesReceived} bytes</div>
+                    <div><strong className="text-slate-400">TX Exact:</strong> {connectionState.bytesSent} bytes</div>
+                    <div><strong className="text-slate-400">Last Msg:</strong> {diag.lastMavlinkMessageName ? `${diag.lastMavlinkMessageName} (#${diag.lastMavlinkMessageId})` : '—'}</div>
+                    <div><strong className="text-slate-400">Phase Message:</strong> <span className="text-purple-300">{connectionState.phaseMessage}</span></div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* HTTPS Mixed Content Alert */}
             {isHttpsOrigin && esp32Proto === 'ws' && (
               <div className="p-2.5 bg-amber-950/70 border border-amber-500/60 rounded-lg text-amber-200 text-[11px] space-y-1">
                 <div className="flex items-center space-x-1.5 font-bold text-amber-300">
                   <ShieldAlert className="w-4 h-4 shrink-0" />
-                  <span>HTTPS Mixed Content Warning</span>
+                  <span>HTTPS Mixed Content Notice</span>
                 </div>
                 <p className="text-[10px] text-amber-300/90 leading-relaxed">
-                  You are loading this app over <strong>HTTPS (Vercel)</strong>. Standard web browsers block unencrypted <code>ws://</code> connections to local IPs (192.168.x.x) for security.
+                  ESP32 local WebSocket requires HTTP for this development connection. Open the local Ground Station URL (<code>http://192.168.10.213:5173</code>) or use the Android native version.
                 </p>
-                <div className="flex flex-wrap gap-2 text-[10px] pt-1">
-                  <span className="bg-slate-900 px-2 py-0.5 rounded border border-slate-700 text-purple-300 font-bold">
-                    1. Use Android Native APK (No mixed-content restrictions)
-                  </span>
-                  <span className="bg-slate-900 px-2 py-0.5 rounded border border-slate-700 text-sky-300 font-bold">
-                    2. Or open via local HTTP URL
-                  </span>
-                </div>
               </div>
             )}
           </div>
@@ -647,7 +739,23 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
               </div>
 
               <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-                {!isUsbDetected && !isConnected ? (
+                {isConnecting ? (
+                  <button
+                    disabled
+                    className="px-3.5 py-1.5 bg-emerald-800 text-emerald-200 rounded-lg text-xs font-black uppercase tracking-wide flex items-center space-x-1.5 opacity-80 cursor-not-allowed"
+                  >
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>CONNECTING...</span>
+                  </button>
+                ) : isUsbActive ? (
+                  <button
+                    onClick={handleDisconnect}
+                    className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white rounded-lg text-xs font-black uppercase tracking-wide transition flex items-center space-x-1.5 shadow-lg shadow-rose-600/30 cursor-pointer"
+                  >
+                    <PowerOff className="w-3.5 h-3.5" />
+                    <span>DISCONNECT</span>
+                  </button>
+                ) : !isUsbDetected && !isConnected ? (
                   <button
                     onClick={handleScan}
                     disabled={isScanning}
@@ -660,26 +768,13 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                     )}
                     <span>SCAN USB DEVICES</span>
                   </button>
-                ) : !isConnected ? (
-                  <button
-                    onClick={handleConnectUsb}
-                    disabled={isConnecting}
-                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white rounded-lg text-xs font-black uppercase tracking-wide transition flex items-center space-x-1.5 shadow-lg shadow-emerald-600/30 cursor-pointer animate-pulse"
-                  >
-                    {isConnecting ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    ) : (
-                      <Usb className="w-3.5 h-3.5" />
-                    )}
-                    <span>CONNECT PIXHAWK</span>
-                  </button>
                 ) : (
                   <button
-                    onClick={handleDisconnect}
-                    className="px-3 py-1.5 bg-rose-950/80 hover:bg-rose-900 border border-rose-600 text-rose-300 rounded-lg text-xs font-bold transition flex items-center space-x-1 cursor-pointer"
+                    onClick={handleConnectUsb}
+                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white rounded-lg text-xs font-black uppercase tracking-wide transition flex items-center space-x-1.5 shadow-lg shadow-emerald-600/30 cursor-pointer animate-pulse"
                   >
-                    <PowerOff className="w-3.5 h-3.5" />
-                    <span>Disconnect</span>
+                    <Usb className="w-3.5 h-3.5" />
+                    <span>CONNECT PIXHAWK</span>
                   </button>
                 )}
 

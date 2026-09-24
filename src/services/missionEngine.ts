@@ -87,7 +87,6 @@ class MissionEngine {
           if (this.remainingSeconds > 0) {
             this.startMasterTimer();
             if (this.currentState === 'TAKEOFF' || this.currentState === 'SEARCHING') {
-              mavlinkService.armDrone();
               mavlinkService.commandStartSearch();
             }
           } else {
@@ -220,14 +219,15 @@ class MissionEngine {
     const home = mavlinkService.getHomePoint();
     const conn = mavlinkService.getConnectionState();
     const runner = runnerCommService.getState();
+    const requiresGps = mavlinkService.isModePositionDependent(telemetry.flightMode);
 
     const checklist: PreFlightChecklist = {
       droneConnected: telemetry.pixhawkConnected,
       pixhawkConnected: conn.isConnected,
       mavlinkAvailable: conn.isConnected && conn.bytesReceived >= 0,
-      gpsAvailable: telemetry.gps.isLocked && telemetry.gps.satellites >= 6,
-      homePointValid: home.isSet && home.latitude !== 0,
-      batterySufficient: telemetry.batteryPercent >= 20,
+      gpsAvailable: requiresGps ? (telemetry.gps.isLocked && telemetry.gps.satellites >= 6) : true,
+      homePointValid: requiresGps ? (home.isSet && home.latitude !== 0) : true,
+      batterySufficient: telemetry.batteryPercent >= 20 || (telemetry.batteryVoltage > 0 && telemetry.batteryVoltage >= 10.5),
       cameraAvailable: telemetry.cameraReady,
       qrScannerAvailable: true,
       runnerConnectionAvailable: runner.isConnected,
@@ -280,7 +280,7 @@ class MissionEngine {
     audioService.triggerHaptic('medium');
 
     // Transmit MAVLink Arm Command to Pixhawk
-    mavlinkService.armDrone();
+    mavlinkService.sendArmCommand();
 
     // 8-Second Safety Timeout if FC fails to start motors
     if (this.armingTimeoutTimer) clearTimeout(this.armingTimeoutTimer);
@@ -320,7 +320,6 @@ class MissionEngine {
     this.transitionTo('IDLE', `Mission Aborted: ${reason}`);
     audioService.playBeep(300, 400, 'sawtooth');
     audioService.triggerHaptic('warning');
-    mavlinkService.disarmDrone();
   }
 
   // Handle Target QR Detected while Airborne
@@ -455,7 +454,6 @@ class MissionEngine {
 
     this.transitionTo('MISSION_COMPLETE', `Mission #${logEntry.missionNumber} Complete. Log saved.`);
     audioService.playMissionComplete();
-    mavlinkService.disarmDrone();
   }
 
   public resetMission() {
@@ -476,7 +474,6 @@ class MissionEngine {
     this.runnerAckLatencyMs = 0;
     this.clearPersistentState();
 
-    mavlinkService.disarmDrone();
     this.notifyState();
   }
 

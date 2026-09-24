@@ -106,6 +106,16 @@ export interface UsbDeviceDiagnostics {
   lastPacketTimestamp?: number;
 }
 
+export interface MAVLinkCommandAck {
+  command: number;
+  commandName?: string;
+  result: number;
+  resultName: string;
+  progress?: number;
+  resultParam2?: number;
+  timestamp: number;
+}
+
 export interface PixhawkStatusMessage {
   id: string;
   timestamp: number;
@@ -136,6 +146,13 @@ export interface PixhawkConnectionState {
   preArmFailReason?: string;
   latestStatusMessage?: PixhawkStatusMessage;
   statusHistory: PixhawkStatusMessage[];
+  lastCommandAck?: MAVLinkCommandAck;
+  lastArmCommandAck?: MAVLinkCommandAck;
+  lastSentCommandId?: number;
+  lastCommandName?: string;
+  lastCommandAckResultName?: string;
+  vehicleState?: 'ARMED' | 'DISARMED' | 'ARMING' | 'DISARMING' | 'UNKNOWN';
+  commandAckHistory: MAVLinkCommandAck[];
   diagnosticsLogs: DiagnosticsLogEntry[];
   isRealHardware: boolean;
   systemId?: number;
