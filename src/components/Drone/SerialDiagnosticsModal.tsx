@@ -2,28 +2,27 @@ import React, { useState } from 'react';
 import { PixhawkConnectionState } from '../../types/mavlink';
 import { mavlinkService } from '../../services/mavlinkService';
 import {
-  X,
-  Sliders,
-  Cpu,
   Usb,
-  Radio,
-  Activity,
-  Terminal,
-  RefreshCw,
+  ShieldCheck,
   CheckCircle2,
   XCircle,
   AlertTriangle,
-  Info,
-  ShieldCheck,
-  Zap,
+  Activity,
+  Cpu,
+  RefreshCw,
   PowerOff,
+  Sliders,
+  HelpCircle,
+  Radio,
   RotateCcw,
+  Terminal,
   Search,
   KeyRound,
-  Check,
-  Battery,
-  Navigation,
-  ExternalLink
+  X,
+  Zap,
+  Wifi,
+  Globe,
+  Server
 } from 'lucide-react';
 
 interface SerialDiagnosticsModalProps {
@@ -40,7 +39,7 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
   const [selectedBaud, setSelectedBaud] = useState<number>(connectionState.baudRate || 57600);
   const [isScanning, setIsScanning] = useState<boolean>(false);
   const [isActionInProgress, setIsActionInProgress] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'troubleshooting' | 'logs'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'esp32' | 'troubleshooting' | 'logs'>('overview');
 
   if (!isOpen) return null;
 
@@ -48,18 +47,23 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
   const phase = connectionState.phase;
   const isConnected = connectionState.isConnected;
   const isUsbConnected = connectionState.isUsbConnected;
-  const isUsbDetected = phase !== 'DISCONNECTED' && phase !== 'USB_NOT_DETECTED' && phase !== 'IOS_UNSUPPORTED';
-  const hasPermission = diag.hasPermission !== false && phase !== 'PERMISSION_DENIED' && phase !== 'USB_PERMISSION_REQUIRED' && phase !== 'REQUESTING_PERMISSION';
+  const isEsp32 = connectionState.connectionType === 'ESP32_WEBSOCKET';
 
-  const lastHeartbeatAge = connectionState.lastHeartbeat
-    ? Math.max(0, Math.round((Date.now() - connectionState.lastHeartbeat) / 1000))
+  const isUsbDetected =
+    phase !== 'DISCONNECTED' &&
+    phase !== 'USB_NOT_DETECTED' &&
+    phase !== 'IOS_UNSUPPORTED';
+
+  const hasPermission = diag.hasPermission !== false;
+
+  const lastHeartbeatAge = connectionState.lastHeartbeat > 0
+    ? Math.floor((Date.now() - connectionState.lastHeartbeat) / 1000)
     : null;
 
   const handleScanDevices = async () => {
     setIsScanning(true);
     try {
       await mavlinkService.scanUsbDevices();
-      await mavlinkService.connectHardware(selectedBaud);
     } finally {
       setIsScanning(false);
     }
@@ -77,7 +81,11 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
   const handleConnect = async () => {
     setIsActionInProgress(true);
     try {
-      await mavlinkService.connectHardware(selectedBaud);
+      if (isEsp32) {
+        await mavlinkService.connectEsp32();
+      } else {
+        await mavlinkService.connectHardware(selectedBaud);
+      }
     } finally {
       setIsActionInProgress(false);
     }
@@ -109,10 +117,10 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
             </div>
             <div>
               <h2 className="text-sm sm:text-base font-black uppercase text-white tracking-wider flex items-center space-x-2">
-                <span>USB DIAGNOSTICS &amp; OTG CONNECTION</span>
+                <span>CONNECTION DIAGNOSTICS &amp; MAVLINK STREAM</span>
               </h2>
               <p className="text-[10px] sm:text-[11px] text-slate-400">
-                Android USB Host enumeration, interface descriptors &amp; MAVLink parser state
+                Live link metrics, packet counters, raw buffer diagnostics &amp; developer logs
               </p>
             </div>
           </div>
@@ -125,31 +133,42 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
           </button>
         </div>
 
-        {/* Navigation Tabs for Mobile / Tablet */}
-        <div className="flex items-center space-x-1 border-b border-slate-800 pb-2 text-xs shrink-0">
+        {/* Navigation Tabs */}
+        <div className="flex items-center space-x-1 border-b border-slate-800 pb-2 text-xs shrink-0 overflow-x-auto">
           <button
             onClick={() => setActiveTab('overview')}
-            className={`px-3 py-1.5 rounded-lg font-bold transition cursor-pointer ${
+            className={`px-3 py-1.5 rounded-lg font-bold transition cursor-pointer whitespace-nowrap ${
               activeTab === 'overview'
                 ? 'bg-sky-600 text-white'
                 : 'bg-slate-800 text-slate-400 hover:text-white'
             }`}
           >
-            Status &amp; Overview
+            Overview &amp; Hardware
+          </button>
+          <button
+            onClick={() => setActiveTab('esp32')}
+            className={`px-3 py-1.5 rounded-lg font-bold transition cursor-pointer flex items-center space-x-1 whitespace-nowrap ${
+              activeTab === 'esp32'
+                ? 'bg-purple-600 text-white'
+                : 'bg-slate-800 text-purple-300 hover:text-white'
+            }`}
+          >
+            <Wifi className="w-3.5 h-3.5" />
+            <span>ESP32-S3 Wireless</span>
           </button>
           <button
             onClick={() => setActiveTab('troubleshooting')}
-            className={`px-3 py-1.5 rounded-lg font-bold transition cursor-pointer ${
+            className={`px-3 py-1.5 rounded-lg font-bold transition cursor-pointer whitespace-nowrap ${
               activeTab === 'troubleshooting'
                 ? 'bg-sky-600 text-white'
                 : 'bg-slate-800 text-slate-400 hover:text-white'
             }`}
           >
-            OTG &amp; Power Troubleshooting
+            OTG &amp; Power Checklist
           </button>
           <button
             onClick={() => setActiveTab('logs')}
-            className={`px-3 py-1.5 rounded-lg font-bold transition cursor-pointer flex items-center space-x-1.5 ${
+            className={`px-3 py-1.5 rounded-lg font-bold transition cursor-pointer flex items-center space-x-1.5 whitespace-nowrap ${
               activeTab === 'logs'
                 ? 'bg-sky-600 text-white'
                 : 'bg-slate-800 text-slate-400 hover:text-white'
@@ -165,133 +184,49 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
         {/* Modal Scrollable Body */}
         <div className="space-y-4 overflow-y-auto pr-1 flex-1">
           
+          {/* TAB 1: OVERVIEW */}
           {activeTab === 'overview' && (
             <>
-              {/* Comprehensive USB Diagnostics Table (Section 12 Requirements) */}
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 text-xs">
                 
-                {/* 1. Android USB Host */}
+                {/* 1. Connection Channel */}
                 <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">Android USB Host</div>
-                  <div className="font-bold flex items-center space-x-1 mt-1">
-                    {diag.isUsbHostSupported !== false ? (
-                      <span className="text-emerald-400">Supported ✓</span>
-                    ) : (
-                      <span className="text-rose-400">Unsupported</span>
-                    )}
-                  </div>
-                </div>
-
-                {/* 2. OTG Device Count */}
-                <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">OTG Device Count</div>
+                  <div className="text-[10px] text-slate-500 uppercase font-bold">Channel Type</div>
                   <div className="font-bold text-sky-300 mt-1">
-                    {diag.connectedDeviceCount ?? (isUsbDetected ? 1 : 0)} connected
+                    {connectionState.connectionType}
                   </div>
                 </div>
 
-                {/* 3. Device Name */}
+                {/* 2. Link State */}
                 <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">Device Name</div>
-                  <div className="font-bold text-slate-200 truncate mt-1" title={diag.productName || 'None'}>
-                    {diag.productName || (isUsbDetected ? 'Pixhawk / USB Serial' : 'None')}
-                  </div>
-                </div>
-
-                {/* 4. Vendor ID */}
-                <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">Vendor ID (VID)</div>
-                  <div className="font-bold text-emerald-400 mt-1">
-                    {formatHex(diag.vendorId)}
-                  </div>
-                </div>
-
-                {/* 5. Product ID */}
-                <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">Product ID (PID)</div>
-                  <div className="font-bold text-emerald-400 mt-1">
-                    {formatHex(diag.productId)}
-                  </div>
-                </div>
-
-                {/* 6. Interface Count */}
-                <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">Interface Count</div>
-                  <div className="font-bold text-slate-200 mt-1">
-                    {diag.interfaceCount ?? (isUsbDetected ? 2 : 0)} interfaces
-                  </div>
-                </div>
-
-                {/* 7. Interface Type */}
-                <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">Interface Type</div>
-                  <div className="font-bold text-sky-400 mt-1 truncate" title={diag.interfaceType || 'CDC ACM'}>
-                    {diag.interfaceType || (isUsbDetected ? 'USB CDC ACM' : 'Standby')}
-                  </div>
-                </div>
-
-                {/* 8. Permission Status */}
-                <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">Permission Status</div>
-                  <div className="font-bold mt-1">
-                    {phase === 'PERMISSION_DENIED' ? (
-                      <span className="text-rose-400">Denied</span>
-                    ) : phase === 'USB_PERMISSION_REQUIRED' || phase === 'REQUESTING_PERMISSION' ? (
-                      <span className="text-amber-400">Requesting...</span>
-                    ) : hasPermission && isUsbDetected ? (
-                      <span className="text-emerald-400">Granted ✓</span>
-                    ) : (
-                      <span className="text-slate-400">Pending</span>
-                    )}
-                  </div>
-                </div>
-
-                {/* 9. Serial Driver */}
-                <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">Serial Driver</div>
-                  <div className="font-bold text-purple-300 mt-1">
-                    {diag.driverType || 'NATIVE_ANDROID_USB'}
-                  </div>
-                </div>
-
-                {/* 10. Selected Baud Rate */}
-                <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">Selected Baud Rate</div>
-                  <div className="font-bold text-sky-300 mt-1">
-                    {connectionState.baudRate} baud
-                  </div>
-                </div>
-
-                {/* 11. Serial Connection Status */}
-                <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">Serial Connection</div>
+                  <div className="text-[10px] text-slate-500 uppercase font-bold">Link State</div>
                   <div className="font-bold mt-1">
                     {isUsbConnected ? (
-                      <span className="text-emerald-400">Open ✓ ({connectionState.bytesReceived} bytes rx)</span>
+                      <span className="text-emerald-400">OPEN ({connectionState.bytesReceived} B rx)</span>
                     ) : (
-                      <span className="text-slate-400">Closed</span>
+                      <span className="text-slate-400">CLOSED</span>
                     )}
                   </div>
                 </div>
 
-                {/* 12. MAVLink Status */}
+                {/* 3. MAVLink State */}
                 <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">MAVLink Status</div>
-                  <div className="font-bold mt-1 truncate">
+                  <div className="text-[10px] text-slate-500 uppercase font-bold">MAVLink State</div>
+                  <div className="font-bold mt-1">
                     {isConnected ? (
-                      <span className="text-emerald-400">Connected ({diag.totalPacketsReceived} pkts)</span>
+                      <span className="text-emerald-400">CONNECTED ({diag.totalPacketsReceived} pkts)</span>
                     ) : (
-                      <span className="text-slate-400">Standby</span>
+                      <span className="text-amber-400">{phase}</span>
                     )}
                   </div>
                 </div>
 
-                {/* 13. Last Heartbeat */}
+                {/* 4. Heartbeat Status */}
                 <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">Last Heartbeat</div>
+                  <div className="text-[10px] text-slate-500 uppercase font-bold">Heartbeat</div>
                   <div className="font-bold mt-1">
                     {lastHeartbeatAge !== null ? (
-                      <span className={lastHeartbeatAge < 3 ? 'text-emerald-400' : 'text-amber-400'}>
+                      <span className={lastHeartbeatAge < 4 ? 'text-emerald-400' : 'text-amber-400'}>
                         {lastHeartbeatAge}s ago ({connectionState.heartbeatHz || 1.0} Hz)
                       </span>
                     ) : (
@@ -300,24 +235,32 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
                   </div>
                 </div>
 
-                {/* 14. System ID & Component ID */}
+                {/* 5. System ID / Comp ID */}
                 <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">System ID / Comp ID</div>
+                  <div className="text-[10px] text-slate-500 uppercase font-bold">SysID / CompID</div>
                   <div className="font-bold text-emerald-400 mt-1">
                     Sys: {connectionState.systemId ?? 1} | Comp: {connectionState.componentId ?? 1}
                   </div>
                 </div>
 
-                {/* 15. Endpoints */}
+                {/* 6. Autopilot Type */}
+                <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                  <div className="text-[10px] text-slate-500 uppercase font-bold">Autopilot</div>
+                  <div className="font-bold text-purple-300 mt-1 truncate">
+                    {connectionState.autopilotType || 'ArduPilot'}
+                  </div>
+                </div>
+
+                {/* 7. Last MAVLink Message */}
                 <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 col-span-2">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">USB Bulk Endpoints</div>
-                  <div className="font-bold text-slate-300 mt-1 text-[11px]">
-                    IN: EP {diag.endpointIn || 1} ({diag.endpointIn || 64}B max) | OUT: EP {diag.endpointOut || 2} ({diag.endpointOut || 64}B max)
+                  <div className="text-[10px] text-slate-500 uppercase font-bold">Last MAVLink Message</div>
+                  <div className="font-bold text-sky-300 mt-1 truncate">
+                    {diag.lastMavlinkMessageName ? `${diag.lastMavlinkMessageName} (msg ${diag.lastMavlinkMessageId})` : 'Waiting for packets...'}
                   </div>
                 </div>
               </div>
 
-              {/* Live Pixhawk STATUSTEXT Messages */}
+              {/* Console Log Messages */}
               <div className="space-y-1.5">
                 <div className="text-xs font-bold text-slate-300 uppercase flex items-center justify-between">
                   <div className="flex items-center space-x-1.5">
@@ -350,51 +293,89 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
             </>
           )}
 
+          {/* TAB 2: ESP32-S3 WIRELESS MATRIX */}
+          {activeTab === 'esp32' && (
+            <div className="space-y-3 text-xs">
+              <div className="p-3.5 bg-purple-950/30 border border-purple-500/40 rounded-xl space-y-3">
+                <div className="font-bold text-purple-300 uppercase flex items-center space-x-2">
+                  <Wifi className="w-4 h-4" />
+                  <span>ESP32-S3 Wireless MAVLink Bridge Parameters</span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[11px]">
+                  <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-slate-500 font-bold uppercase text-[10px]">Active Address</span>
+                    <div className="font-mono text-purple-300 font-bold mt-0.5">{connectionState.portOrAddress}</div>
+                  </div>
+                  <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-slate-500 font-bold uppercase text-[10px]">UART Baud Rate</span>
+                    <div className="font-mono text-emerald-400 font-bold mt-0.5">{connectionState.baudRate} baud</div>
+                  </div>
+                  <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-slate-500 font-bold uppercase text-[10px]">RX Byte Counter</span>
+                    <div className="font-mono text-sky-400 font-bold mt-0.5">{connectionState.bytesReceived} bytes</div>
+                  </div>
+                  <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-slate-500 font-bold uppercase text-[10px]">TX Byte Counter</span>
+                    <div className="font-mono text-sky-400 font-bold mt-0.5">{connectionState.bytesSent} bytes</div>
+                  </div>
+                  <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-slate-500 font-bold uppercase text-[10px]">Total Packets</span>
+                    <div className="font-mono text-emerald-400 font-bold mt-0.5">{diag.totalPacketsReceived}</div>
+                  </div>
+                  <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-slate-500 font-bold uppercase text-[10px]">Heartbeats</span>
+                    <div className="font-mono text-emerald-400 font-bold mt-0.5">{diag.heartbeatsCount}</div>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-[11px] text-slate-300 space-y-1">
+                  <div className="font-bold text-slate-200">How Data Flows End-to-End:</div>
+                  <div>1. Pixhawk transmits telemetry at 57600 baud via TELEM2 port.</div>
+                  <div>2. ESP32-S3 receives UART frames on RX pin and forwards binary frames to WebSocket clients on port 8080.</div>
+                  <div>3. Browser decodes MAVLink packets and displays real telemetry without simulation.</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 3: TROUBLESHOOTING */}
           {activeTab === 'troubleshooting' && (
             <div className="space-y-3 text-xs">
-              {/* Power Condition Card */}
               <div className="p-3.5 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
                 <div className="font-bold text-amber-400 uppercase flex items-center space-x-2">
                   <Zap className="w-4 h-4" />
                   <span>Pixhawk Power Condition &amp; Host Limitation</span>
                 </div>
                 <p className="text-[11px] text-slate-300 leading-relaxed">
-                  <strong>Notice:</strong> Pixhawk flight controllers with GPS, telemetry modules, and servos can draw more current than a smartphone USB-OTG port supplies (max ~500mA). If the flight controller reboots or disconnects when plugged into the phone:
+                  Pixhawk flight controllers with GPS and servos require adequate power. Ensure Pixhawk is powered by its LiPo battery module when connecting to ESP32 or phone USB.
                 </p>
-                <div className="p-2.5 bg-amber-950/40 border border-amber-500/30 rounded-lg text-amber-200 text-[11px]">
-                  <strong>Recommended:</strong> Power the Pixhawk via its dedicated LiPo Power Module / PDB while connecting the USB cable to the phone solely for MAVLink serial data transfer.
-                </div>
               </div>
 
-              {/* Step-by-Step 7-Point Diagnostic Checklist (Requirement 14) */}
               <div className="p-3.5 bg-slate-950 rounded-xl border border-slate-800 space-y-2.5">
                 <div className="font-bold text-sky-400 uppercase flex items-center space-x-2">
                   <ShieldCheck className="w-4 h-4" />
-                  <span>USB Cable &amp; OTG Diagnostic Checklist</span>
+                  <span>Hardware Connection Checklist</span>
                 </div>
-                <p className="text-[11px] text-slate-400">If zero USB devices are detected by Android, verify the following 7 points:</p>
                 <ol className="space-y-1.5 text-[11px] text-slate-200 list-decimal list-inside">
-                  <li><strong>Verify phone supports USB OTG/USB Host:</strong> Ensure OTG support is active in Android system settings.</li>
-                  <li><strong>Verify the OTG adapter supports data transfer:</strong> Some cheap OTG adapters are charge-only or missing the ID pin bridge.</li>
-                  <li><strong>Verify the USB cable is a 4-wire data cable:</strong> Charge-only cables will not transmit serial packets.</li>
-                  <li><strong>Verify the Pixhawk is powered:</strong> Pixhawk main status LED should cycle and tones should sound.</li>
-                  <li><strong>Verify the correct Pixhawk USB port is being used:</strong> Use the primary micro-USB port on the side of the Pixhawk chassis.</li>
-                  <li><strong>Disconnect and reconnect the OTG adapter:</strong> Android OS re-enumerates the USB host tree upon re-insertion.</li>
-                  <li><strong>Retry USB device scan:</strong> Click "Scan USB Devices" below.</li>
+                  <li><strong>Check TELEM2 wiring:</strong> TX➔RX, RX➔TX, GND➔GND, 5V➔5V.</li>
+                  <li><strong>Verify Baud Rate:</strong> Ensure Pixhawk parameter <code>SERIAL2_BAUD = 57</code> (57600 baud).</li>
+                  <li><strong>Verify Protocol:</strong> Ensure Pixhawk parameter <code>SERIAL2_PROTOCOL = 2</code> (MAVLink2).</li>
+                  <li><strong>Verify Wi-Fi Network:</strong> Phone must be connected to the same Wi-Fi network as the ESP32.</li>
                 </ol>
               </div>
             </div>
           )}
 
+          {/* TAB 4: LIVE LOGS */}
           {activeTab === 'logs' && (
             <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs text-slate-400">
-                <span>Real-Time Developer Event Log</span>
-                <span>{connectionState.diagnosticsLogs.length} entries</span>
+              <div className="text-xs font-bold text-slate-300 uppercase flex items-center justify-between">
+                <span>Real-Time Driver &amp; Parser Logs</span>
+                <span className="text-[10px] text-slate-500">Auto-scrolling</span>
               </div>
-              <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 max-h-72 overflow-y-auto text-[11px] space-y-1 font-mono">
+              <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 max-h-64 overflow-y-auto space-y-1 text-[11px] font-mono">
                 {connectionState.diagnosticsLogs.length === 0 ? (
-                  <div className="text-slate-600 italic">No developer logs recorded yet.</div>
+                  <div className="text-slate-600 italic">No diagnostic events logged yet.</div>
                 ) : (
                   connectionState.diagnosticsLogs.map((log) => (
                     <div key={log.id} className="flex items-start space-x-2 leading-tight">
@@ -434,7 +415,6 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
 
         {/* Modal Action Buttons Footer */}
         <div className="pt-3 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2 shrink-0">
-          {/* Baud Rate Override */}
           <div className="flex items-center space-x-2">
             <span className="text-[11px] text-slate-400 font-bold uppercase">Baud Rate:</span>
             <select
@@ -442,40 +422,21 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
               onChange={(e) => setSelectedBaud(Number(e.target.value))}
               className="bg-slate-950 text-slate-200 text-xs px-2.5 py-1.5 rounded-lg border border-slate-700 cursor-pointer"
             >
-              <option value={57600}>57600 (Default TELEM1 / SiK Radio)</option>
+              <option value={57600}>57600 (Default TELEM2 / SiK Radio)</option>
               <option value={115200}>115200 (Pixhawk USB / UART)</option>
               <option value={921600}>921600 (High-Speed Companion)</option>
               <option value={38400}>38400 (Legacy Telemetry)</option>
             </select>
           </div>
 
-          {/* Action Button Group */}
           <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-            <button
-              onClick={handleScanDevices}
-              disabled={isScanning || isActionInProgress}
-              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-sky-400 rounded-xl text-xs font-bold transition flex items-center space-x-1 border border-slate-700 cursor-pointer"
-            >
-              <Search className={`w-3.5 h-3.5 ${isScanning ? 'animate-spin' : ''}`} />
-              <span>Scan USB</span>
-            </button>
-
-            <button
-              onClick={handleRequestPermission}
-              disabled={isActionInProgress}
-              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-300 rounded-xl text-xs font-bold transition flex items-center space-x-1 border border-slate-700 cursor-pointer"
-            >
-              <KeyRound className="w-3.5 h-3.5" />
-              <span>Request Permission</span>
-            </button>
-
             {!isConnected ? (
               <button
                 onClick={handleConnect}
                 disabled={isActionInProgress}
                 className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase transition flex items-center space-x-1.5 shadow-lg shadow-emerald-600/30 cursor-pointer"
               >
-                <Usb className="w-3.5 h-3.5" />
+                <Wifi className="w-3.5 h-3.5" />
                 <span>Connect</span>
               </button>
             ) : (
@@ -488,16 +449,6 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
                 <span>Disconnect</span>
               </button>
             )}
-
-            <button
-              onClick={handleConnect}
-              disabled={isActionInProgress}
-              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold transition flex items-center space-x-1 border border-slate-700 cursor-pointer"
-              title="Retry Connection"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>Retry</span>
-            </button>
 
             <button
               onClick={onClose}

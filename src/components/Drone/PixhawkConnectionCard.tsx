@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { PixhawkConnectionState, ConnectionPhase } from '../../types/mavlink';
 import { mavlinkService } from '../../services/mavlinkService';
+import { transportManager } from '../../services/transports/TransportManager';
 import {
   Usb,
   ShieldCheck,
@@ -20,8 +21,14 @@ import {
   Check,
   Lock,
   Search,
-  ChevronDown,
-  ChevronUp
+  Wifi,
+  Globe,
+  Info,
+  Server,
+  Cable,
+  ArrowRight,
+  ShieldAlert,
+  Clock
 } from 'lucide-react';
 import { SerialDiagnosticsModal } from './SerialDiagnosticsModal';
 
@@ -39,16 +46,54 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
   const [isConnecting, setIsConnecting] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [showEsp32Guide, setShowEsp32Guide] = useState(false);
   const [selectedBaud, setSelectedBaud] = useState<number>(connectionState.baudRate || 57600);
-  const [activeMethod, setActiveMethod] = useState<'USB' | 'NETWORK' | 'SIM'>('USB');
+  
+  // Connection Mode: 'USB' | 'ESP32' | 'SIM'
+  const [connectionMode, setConnectionMode] = useState<'USB' | 'ESP32' | 'SIM'>(() => {
+    if (connectionState.connectionType === 'ESP32_WEBSOCKET') return 'ESP32';
+    if (connectionState.connectionType === 'SIMULATED') return 'SIM';
+    return 'ESP32'; // Default to ESP32 wireless mode as requested
+  });
+
+  // ESP32 Settings
+  const [esp32Host, setEsp32Host] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('esp32_host') || '192.168.4.1';
+    }
+    return '192.168.4.1';
+  });
+  const [esp32Port, setEsp32Port] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const p = localStorage.getItem('esp32_port');
+      return p ? parseInt(p, 10) || 8080 : 8080;
+    }
+    return 8080;
+  });
+  const [esp32Proto, setEsp32Proto] = useState<'ws' | 'wss'>(() => {
+    if (typeof window !== 'undefined') {
+      const pr = localStorage.getItem('esp32_proto');
+      if (pr === 'ws' || pr === 'wss') return pr;
+      return window.location.protocol === 'https:' ? 'ws' : 'ws';
+    }
+    return 'ws';
+  });
+
+  const isHttpsOrigin = typeof window !== 'undefined' && window.location.protocol === 'https:';
 
   const phase: ConnectionPhase = connectionState.phase;
   const isConnected = connectionState.isConnected; // MAVLink verified
-  const isUsbConnected = connectionState.isUsbConnected; // Physical USB link open
+  const isUsbConnected = connectionState.isUsbConnected; // Physical or WS link open
   const isSimulated = connectionState.connectionType === 'SIMULATED';
+  const isEsp32Mode = connectionMode === 'ESP32';
   const diag = connectionState.diagnostics;
 
   // Granular Stage Flags
+  const isWebSocketOpen = isUsbConnected && connectionState.connectionType === 'ESP32_WEBSOCKET';
+  const isMavlinkHeartbeatReceived = isConnected && connectionState.lastHeartbeat > 0 && (Date.now() - connectionState.lastHeartbeat < 4500);
+  const isHeartbeatTimeout = phase === 'HEARTBEAT_TIMEOUT' || phase === 'NO_MAVLINK_HEARTBEAT' || (isConnected && Date.now() - connectionState.lastHeartbeat > 4500);
+  const isWaitingMavlink = (phase === 'WAITING_FOR_MAVLINK' || phase === 'WAITING_FOR_HEARTBEAT' || phase === 'SERIAL_OPEN') && !isConnected;
+
   const isUsbDetected = 
     phase !== 'DISCONNECTED' && 
     phase !== 'USB_NOT_DETECTED' && 
@@ -70,23 +115,7 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
 
   const isPermissionRequested = phase === 'USB_PERMISSION_REQUIRED' || phase === 'REQUESTING_PERMISSION';
   const isPermissionDenied = phase === 'PERMISSION_DENIED';
-
-  const isSerialOpen =
-    isUsbConnected ||
-    phase === 'SERIAL_OPEN' ||
-    phase === 'WAITING_FOR_MAVLINK' ||
-    phase === 'HEARTBEAT_RECEIVED' ||
-    phase === 'PIXHAWK_CONNECTED' ||
-    phase === 'TELEMETRY_ACTIVE' ||
-    phase === 'USB_CONNECTED' ||
-    phase === 'WAITING_FOR_HEARTBEAT' ||
-    phase === 'MAVLINK_CONNECTED' ||
-    phase === 'HEARTBEAT_TIMEOUT';
-
-  const isWaitingMavlink = (phase === 'WAITING_FOR_MAVLINK' || phase === 'WAITING_FOR_HEARTBEAT' || phase === 'SERIAL_OPEN') && !isConnected;
-  const isHeartbeatTimeout = phase === 'HEARTBEAT_TIMEOUT' || phase === 'NO_MAVLINK_HEARTBEAT';
-  const isNoSerialData = phase === 'NO_SERIAL_DATA';
-  const isTelemetryActive = isConnected && connectionState.isReceivingTelemetry;
+  const isSerialOpen = isUsbConnected || phase === 'SERIAL_OPEN' || isConnected;
 
   const handleScan = async () => {
     setIsScanning(true);
@@ -98,12 +127,29 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
     }
   };
 
-  const handleConnect = async () => {
+  const handleConnectUsb = async () => {
     setIsConnecting(true);
     try {
       await mavlinkService.connectHardware(selectedBaud);
     } catch (e) {
       console.warn('Connect error:', e);
+    } finally {
+      setIsConnecting(false);
+    }
+  };
+
+  const handleConnectEsp32 = async () => {
+    setIsConnecting(true);
+    try {
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('esp32_host', esp32Host.trim());
+        localStorage.setItem('esp32_port', esp32Port.toString());
+        localStorage.setItem('esp32_proto', esp32Proto);
+        localStorage.setItem('esp32_baud', selectedBaud.toString());
+      }
+      await mavlinkService.connectEsp32(esp32Host.trim(), esp32Port, esp32Proto, selectedBaud);
+    } catch (e) {
+      console.warn('ESP32 connect error:', e);
     } finally {
       setIsConnecting(false);
     }
@@ -124,9 +170,17 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
 
   const handleBaudChange = (newBaud: number) => {
     setSelectedBaud(newBaud);
-    if (isUsbConnected) {
+    if (isUsbConnected && connectionState.connectionType === 'USB_SERIAL') {
       mavlinkService.connectHardware(newBaud);
     }
+  };
+
+  // Format last packet age
+  const formatPacketAge = () => {
+    if (!diag.lastPacketTimestamp || diag.lastPacketTimestamp === 0) return 'Never';
+    const ageMs = Date.now() - diag.lastPacketTimestamp;
+    if (ageMs < 1000) return `${ageMs}ms ago`;
+    return `${(ageMs / 1000).toFixed(1)}s ago`;
   };
 
   return (
@@ -141,7 +195,7 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
           : 'border-slate-700/80 shadow-slate-950/60'
       } ${className}`}>
         
-        {/* Top Header & Connection Method Selector */}
+        {/* Top Header & Connection Mode Selector */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
           <div className="flex items-center space-x-2.5 min-w-0">
             <div className={`p-2 rounded-xl border shrink-0 ${
@@ -153,12 +207,16 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                 ? 'bg-amber-950/80 text-amber-400 border-amber-500/50'
                 : 'bg-slate-800 text-slate-400 border-slate-700'
             }`}>
-              <Usb className="w-4 h-4 sm:w-5 sm:h-5" />
+              {isEsp32Mode ? (
+                <Wifi className="w-4 h-4 sm:w-5 sm:h-5" />
+              ) : (
+                <Usb className="w-4 h-4 sm:w-5 sm:h-5" />
+              )}
             </div>
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="text-xs sm:text-sm font-black uppercase text-white tracking-wider">
-                  PIXHAWK CONNECTION
+                  {isEsp32Mode ? 'ESP32-S3 WIRELESS MAVLINK' : 'PIXHAWK USB OTG CONNECTION'}
                 </span>
                 
                 {/* Real-time Status Badge */}
@@ -166,6 +224,8 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                   isConnected
                     ? isSimulated
                       ? 'bg-purple-950/80 text-purple-300 border-purple-500/50'
+                      : connectionState.connectionType === 'ESP32_WEBSOCKET'
+                      ? 'bg-emerald-950/90 text-emerald-300 border-emerald-500/60 animate-pulse'
                       : 'bg-emerald-950/90 text-emerald-300 border-emerald-500/60'
                     : isWaitingMavlink
                     ? 'bg-amber-950/80 text-amber-300 border-amber-500/50 animate-pulse'
@@ -173,25 +233,25 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                     ? 'bg-amber-950/80 text-amber-300 border-amber-500/50'
                     : phase === 'PERMISSION_DENIED'
                     ? 'bg-rose-950/80 text-rose-300 border-rose-500/50'
-                    : isUsbDetected
+                    : isUsbConnected
                     ? 'bg-sky-950/80 text-sky-300 border-sky-500/50'
                     : 'bg-slate-800 text-slate-400 border-slate-700'
                 }`}>
                   {isConnected
                     ? isSimulated
                       ? 'SIMULATED MAVLINK ✓'
+                      : connectionState.connectionType === 'ESP32_WEBSOCKET'
+                      ? 'MAVLINK CONNECTED ✓'
                       : 'PIXHAWK CONNECTED ✓'
                     : isWaitingMavlink
                     ? 'WAITING HEARTBEAT ⟳'
                     : isHeartbeatTimeout
                     ? 'HEARTBEAT TIMEOUT ⚠️'
-                    : isNoSerialData
-                    ? 'NO SERIAL DATA'
+                    : isWebSocketOpen
+                    ? 'WEBSOCKET OPEN (WAITING)'
                     : phase === 'PERMISSION_DENIED'
                     ? 'PERMISSION DENIED'
-                    : isUsbDetected
-                    ? 'DEVICE DETECTED'
-                    : 'NOT CONNECTED'}
+                    : 'DISCONNECTED'}
                 </span>
               </div>
               
@@ -201,289 +261,449 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
             </div>
           </div>
 
-          {/* Connection Method Selector Pills */}
+          {/* Connection Method Selector Tabs */}
           <div className="flex items-center space-x-1 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs shrink-0">
             <button
-              onClick={() => setActiveMethod('USB')}
-              className={`px-2.5 py-1 rounded-lg font-bold transition cursor-pointer flex items-center space-x-1 ${
-                activeMethod === 'USB'
-                  ? 'bg-sky-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Usb className="w-3 h-3" />
-              <span>USB OTG</span>
-            </button>
-            <button
               onClick={() => {
-                setActiveMethod('NETWORK');
-                mavlinkService.setTransport('udp');
+                setConnectionMode('ESP32');
+                if (connectionState.connectionType !== 'ESP32_WEBSOCKET') {
+                  mavlinkService.disconnect();
+                }
               }}
-              className={`px-2.5 py-1 rounded-lg font-bold transition cursor-pointer flex items-center space-x-1 ${
-                activeMethod === 'NETWORK'
+              className={`px-2.5 py-1 rounded-lg font-bold transition cursor-pointer flex items-center space-x-1.5 ${
+                connectionMode === 'ESP32'
+                  ? 'bg-purple-600 text-white shadow'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Wifi className="w-3.5 h-3.5 text-purple-200" />
+              <span>ESP32-S3 Wireless</span>
+            </button>
+            <button
+              onClick={() => {
+                setConnectionMode('USB');
+                if (connectionState.connectionType !== 'USB_SERIAL') {
+                  mavlinkService.disconnect();
+                }
+              }}
+              className={`px-2.5 py-1 rounded-lg font-bold transition cursor-pointer flex items-center space-x-1.5 ${
+                connectionMode === 'USB'
                   ? 'bg-sky-600 text-white shadow'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              <Radio className="w-3 h-3" />
-              <span>Wireless</span>
+              <Usb className="w-3.5 h-3.5" />
+              <span>USB OTG / Serial</span>
             </button>
             <button
               onClick={() => {
-                setActiveMethod('SIM');
+                setConnectionMode('SIM');
                 mavlinkService.switchToSimulationMode();
               }}
-              className={`px-2.5 py-1 rounded-lg font-bold transition cursor-pointer flex items-center space-x-1 ${
+              className={`px-2.5 py-1 rounded-lg font-bold transition cursor-pointer flex items-center space-x-1.5 ${
                 isSimulated
-                  ? 'bg-purple-600 text-white shadow'
-                  : 'text-purple-400 hover:text-purple-200'
+                  ? 'bg-emerald-600 text-white shadow'
+                  : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              <Cpu className="w-3 h-3" />
+              <Cpu className="w-3.5 h-3.5" />
               <span>Simulator</span>
             </button>
           </div>
         </div>
 
-        {/* Dedicated Responsive State Cards Grid (Section 10 Requirements) */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 my-3 text-[11px]">
-          
-          {/* 1. USB Status */}
-          <div className={`p-2.5 rounded-xl border flex flex-col justify-between ${
-            isUsbDetected || isConnected
-              ? 'bg-slate-950/80 border-emerald-500/40 text-slate-200'
-              : 'bg-slate-950/40 border-slate-800 text-slate-400'
-          }`}>
-            <span className="text-[10px] uppercase text-slate-500 font-bold">USB Status</span>
-            <div className="flex items-center space-x-1.5 mt-1 font-bold">
-              {isConnected || isUsbConnected ? (
-                <>
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  <span className="text-emerald-300">Connected ✓</span>
-                </>
-              ) : isUsbDetected ? (
-                <>
-                  <CheckCircle2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-                  <span className="text-sky-300">Device Detected</span>
-                </>
-              ) : (
-                <>
-                  <XCircle className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                  <span>Not Connected</span>
-                </>
-              )}
-            </div>
-          </div>
-
-          {/* 2. Device Identity */}
-          <div className={`p-2.5 rounded-xl border flex flex-col justify-between ${
-            isUsbDetected || isConnected
-              ? 'bg-slate-950/80 border-emerald-500/40 text-slate-200'
-              : 'bg-slate-950/40 border-slate-800 text-slate-400'
-          }`}>
-            <span className="text-[10px] uppercase text-slate-500 font-bold">Device</span>
-            <div className="flex items-center space-x-1.5 mt-1 font-bold">
-              {isUsbDetected || isConnected ? (
-                <>
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  <span className="text-emerald-300 truncate" title={diag.productName || 'Pixhawk / USB Serial'}>
-                    {diag.productName || 'Pixhawk / USB Serial'}
-                  </span>
-                </>
-              ) : (
-                <>
-                  <XCircle className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                  <span>Not Detected</span>
-                </>
-              )}
-            </div>
-          </div>
-
-          {/* 3. USB Permission */}
-          <div className={`p-2.5 rounded-xl border flex flex-col justify-between ${
-            isPermissionGranted || isConnected
-              ? 'bg-slate-950/80 border-emerald-500/40 text-slate-200'
-              : isPermissionRequested
-              ? 'bg-slate-950/80 border-amber-500/50 text-amber-300'
-              : isPermissionDenied
-              ? 'bg-rose-950/40 border-rose-500/50 text-rose-300'
-              : 'bg-slate-950/40 border-slate-800 text-slate-400'
-          }`}>
-            <span className="text-[10px] uppercase text-slate-500 font-bold">Permission</span>
-            <div className="flex items-center space-x-1.5 mt-1 font-bold">
-              {isPermissionGranted || isConnected ? (
-                <>
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  <span className="text-emerald-300">Granted ✓</span>
-                </>
-              ) : isPermissionRequested ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 text-amber-400 animate-spin shrink-0" />
-                  <span>Requesting...</span>
-                </>
-              ) : isPermissionDenied ? (
-                <>
-                  <XCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-                  <span className="text-rose-300">Denied</span>
-                </>
-              ) : (
-                <>
-                  <span className="text-slate-500 font-bold">—</span>
-                </>
-              )}
-            </div>
-          </div>
-
-          {/* 4. Serial Port & Baud Rate */}
-          <div className={`p-2.5 rounded-xl border flex flex-col justify-between ${
-            isSerialOpen || isConnected
-              ? 'bg-slate-950/80 border-emerald-500/40 text-slate-200'
-              : 'bg-slate-950/40 border-slate-800 text-slate-400'
-          }`}>
-            <span className="text-[10px] uppercase text-slate-500 font-bold">Serial</span>
-            <div className="flex items-center space-x-1.5 mt-1 font-bold">
-              {isSerialOpen || isConnected ? (
-                <>
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  <span className="text-emerald-300">Open ({selectedBaud})</span>
-                </>
-              ) : isUsbDetected ? (
-                <span className="text-slate-400">Closed</span>
-              ) : (
-                <span className="text-slate-500 font-bold">—</span>
-              )}
-            </div>
-          </div>
-
-          {/* 5. MAVLink Status */}
-          <div className={`p-2.5 rounded-xl border flex flex-col justify-between ${
-            isConnected
-              ? 'bg-slate-950/80 border-emerald-500/40 text-slate-200'
-              : isWaitingMavlink
-              ? 'bg-slate-950/80 border-amber-500/50 text-amber-300'
-              : isHeartbeatTimeout
-              ? 'bg-amber-950/40 border-amber-500/50 text-amber-300'
-              : 'bg-slate-950/40 border-slate-800 text-slate-400'
-          }`}>
-            <span className="text-[10px] uppercase text-slate-500 font-bold">MAVLink</span>
-            <div className="flex items-center space-x-1.5 mt-1 font-bold">
-              {isConnected ? (
-                <>
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  <span className="text-emerald-300">Connected ✓</span>
-                </>
-              ) : isWaitingMavlink ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 text-amber-400 animate-spin shrink-0" />
-                  <span className="text-amber-300">Waiting...</span>
-                </>
-              ) : isHeartbeatTimeout ? (
-                <>
-                  <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                  <span className="text-amber-300">No Heartbeat</span>
-                </>
-              ) : (
-                <span className="text-slate-500 font-bold">—</span>
-              )}
-            </div>
-          </div>
-
-          {/* 6. Heartbeat Stream */}
-          <div className={`p-2.5 rounded-xl border flex flex-col justify-between ${
-            isTelemetryActive
-              ? 'bg-slate-950/80 border-emerald-500/40 text-slate-200'
-              : 'bg-slate-950/40 border-slate-800 text-slate-400'
-          }`}>
-            <span className="text-[10px] uppercase text-slate-500 font-bold">Heartbeat</span>
-            <div className="flex items-center space-x-1.5 mt-1 font-bold">
-              {isTelemetryActive ? (
-                <>
-                  <Activity className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  <span className="text-emerald-300">Receiving ✓ ({connectionState.heartbeatHz || 1.0} Hz)</span>
-                </>
-              ) : (
-                <span className="text-slate-500 font-bold">—</span>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Action Controls Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800/80">
-          {/* Baud Rate Selector */}
-          <div className="flex items-center space-x-2 text-xs">
-            <span className="text-slate-400 font-bold uppercase text-[10px]">Baud:</span>
-            <select
-              value={selectedBaud}
-              onChange={(e) => handleBaudChange(Number(e.target.value))}
-              className="bg-slate-950 text-slate-200 text-xs px-2.5 py-1 rounded-lg border border-slate-700 cursor-pointer"
-            >
-              <option value={57600}>57600 (Default Telemetry)</option>
-              <option value={115200}>115200 (USB / High-Speed)</option>
-              <option value={921600}>921600 (Fast UART)</option>
-              <option value={38400}>38400 (Legacy)</option>
-            </select>
-          </div>
-
-          {/* Dynamic Buttons */}
-          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-            {!isUsbDetected && !isConnected ? (
+        {/* ========================================================================= */}
+        {/* SECTION 1: ESP32-S3 WIRELESS MAVLINK DECK (WHEN ESP32 MODE IS ACTIVE)     */}
+        {/* ========================================================================= */}
+        {connectionMode === 'ESP32' && (
+          <div className="my-3 p-3.5 bg-purple-950/30 border border-purple-500/40 rounded-xl space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-purple-500/20">
+              <div className="flex items-center space-x-2">
+                <Wifi className="w-4 h-4 text-purple-400 shrink-0" />
+                <span className="text-xs font-black text-purple-200 uppercase tracking-wider">
+                  Pixhawk TELEM2 ➔ ESP32-S3 Wi-Fi WebSocket Bridge
+                </span>
+              </div>
               <button
-                onClick={handleScan}
-                disabled={isScanning}
-                className="px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-black uppercase tracking-wide transition flex items-center space-x-1.5 shadow-lg shadow-sky-600/30 cursor-pointer"
-              >
-                {isScanning ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <Search className="w-3.5 h-3.5" />
-                )}
-                <span>SCAN USB DEVICES</span>
-              </button>
-            ) : !isConnected ? (
-              <button
-                onClick={handleConnect}
-                disabled={isConnecting}
-                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white rounded-lg text-xs font-black uppercase tracking-wide transition flex items-center space-x-1.5 shadow-lg shadow-emerald-600/30 cursor-pointer animate-pulse"
-              >
-                {isConnecting ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <Usb className="w-3.5 h-3.5" />
-                )}
-                <span>CONNECT PIXHAWK</span>
-              </button>
-            ) : (
-              <button
-                onClick={handleDisconnect}
-                className="px-3 py-1.5 bg-rose-950/80 hover:bg-rose-900 border border-rose-600 text-rose-300 rounded-lg text-xs font-bold transition flex items-center space-x-1 cursor-pointer"
-              >
-                <PowerOff className="w-3.5 h-3.5" />
-                <span>Disconnect</span>
-              </button>
-            )}
-
-            <button
-              onClick={() => setShowDiagnostics(true)}
-              className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-sky-400 rounded-lg text-xs font-bold transition flex items-center space-x-1 border border-slate-700 cursor-pointer"
-              title="Open Complete USB Diagnostics Screen"
-            >
-              <Sliders className="w-3.5 h-3.5" />
-              <span>USB Diagnostics</span>
-            </button>
-
-            {onOpenHelp && (
-              <button
-                onClick={onOpenHelp}
-                className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-300 rounded-lg text-xs font-bold transition flex items-center space-x-1 border border-slate-700 cursor-pointer"
-                title="OTG Cable & Troubleshooting Guide"
+                onClick={() => setShowEsp32Guide(true)}
+                className="text-[11px] text-purple-300 hover:text-purple-100 flex items-center space-x-1 underline cursor-pointer"
               >
                 <HelpCircle className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">OTG Guide</span>
+                <span>Wi-Fi Provisioning &amp; TELEM2 Wiring</span>
               </button>
+            </div>
+
+            {/* Input Controls Bar: IP, Port, Baud, Protocol, Connect */}
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 text-xs items-center">
+              
+              {/* Protocol */}
+              <div className="sm:col-span-2 flex items-center space-x-1 bg-slate-950 px-2.5 py-1.5 rounded-lg border border-slate-700">
+                <span className="text-slate-400 text-[10px] font-bold uppercase shrink-0">Proto:</span>
+                <select
+                  value={esp32Proto}
+                  onChange={(e) => setEsp32Proto(e.target.value as 'ws' | 'wss')}
+                  className="bg-transparent text-slate-100 font-mono text-xs w-full focus:outline-none cursor-pointer"
+                >
+                  <option value="ws" className="bg-slate-900 text-white">ws://</option>
+                  <option value="wss" className="bg-slate-900 text-white">wss://</option>
+                </select>
+              </div>
+
+              {/* IP Input */}
+              <div className="sm:col-span-4 flex items-center space-x-1.5 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-700">
+                <span className="text-slate-400 text-[10px] font-bold uppercase shrink-0">ESP32 IP:</span>
+                <input
+                  type="text"
+                  value={esp32Host}
+                  onChange={(e) => setEsp32Host(e.target.value)}
+                  placeholder="192.168.4.1"
+                  className="bg-transparent text-slate-100 font-mono text-xs w-full focus:outline-none"
+                />
+              </div>
+
+              {/* Port Input */}
+              <div className="sm:col-span-2 flex items-center space-x-1.5 bg-slate-950 px-2.5 py-1.5 rounded-lg border border-slate-700">
+                <span className="text-slate-400 text-[10px] font-bold uppercase shrink-0">Port:</span>
+                <input
+                  type="number"
+                  value={esp32Port}
+                  onChange={(e) => setEsp32Port(parseInt(e.target.value, 10) || 8080)}
+                  placeholder="8080"
+                  className="bg-transparent text-slate-100 font-mono text-xs w-full focus:outline-none"
+                />
+              </div>
+
+              {/* Baud Rate Dropdown */}
+              <div className="sm:col-span-2 flex items-center space-x-1 bg-slate-950 px-2 py-1.5 rounded-lg border border-slate-700">
+                <span className="text-slate-400 text-[10px] font-bold uppercase shrink-0">Baud:</span>
+                <select
+                  value={selectedBaud}
+                  onChange={(e) => handleBaudChange(Number(e.target.value))}
+                  className="bg-transparent text-slate-100 font-mono text-xs w-full focus:outline-none cursor-pointer"
+                >
+                  <option value={57600} className="bg-slate-900 text-white">57600</option>
+                  <option value={115200} className="bg-slate-900 text-white">115200</option>
+                  <option value={921600} className="bg-slate-900 text-white">921600</option>
+                  <option value={38400} className="bg-slate-900 text-white">38400</option>
+                </select>
+              </div>
+
+              {/* Action Button: Connect / Disconnect */}
+              <div className="sm:col-span-2">
+                {!isConnected && connectionState.connectionType !== 'ESP32_WEBSOCKET' ? (
+                  <button
+                    onClick={handleConnectEsp32}
+                    disabled={isConnecting}
+                    className="w-full py-2 bg-purple-600 hover:bg-purple-500 active:bg-purple-700 text-white rounded-lg text-xs font-black uppercase tracking-wide transition flex items-center justify-center space-x-1.5 shadow-lg shadow-purple-600/30 cursor-pointer"
+                  >
+                    {isConnecting ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Wifi className="w-3.5 h-3.5" />
+                    )}
+                    <span>CONNECT</span>
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleDisconnect}
+                    className="w-full py-2 bg-rose-950/80 hover:bg-rose-900 border border-rose-600 text-rose-300 rounded-lg text-xs font-bold transition flex items-center justify-center space-x-1 cursor-pointer"
+                  >
+                    <PowerOff className="w-3.5 h-3.5" />
+                    <span>Disconnect</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Live Connection Diagnostics Matrix (Section 7 & 17 Requirements) */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2 pt-1 text-[10px]">
+              
+              {/* 1. ESP32 State */}
+              <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800">
+                <div className="text-slate-400 uppercase font-bold">ESP32 IP</div>
+                <div className="font-bold text-purple-300 truncate mt-0.5">{esp32Host}:{esp32Port}</div>
+              </div>
+
+              {/* 2. WebSocket State */}
+              <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800">
+                <div className="text-slate-400 uppercase font-bold">WebSocket</div>
+                <div className={`font-bold mt-0.5 ${
+                  isWebSocketOpen ? 'text-emerald-400' : isConnecting ? 'text-amber-400' : 'text-slate-400'
+                }`}>
+                  {isWebSocketOpen ? 'CONNECTED ✓' : isConnecting ? 'CONNECTING...' : 'DISCONNECTED'}
+                </div>
+              </div>
+
+              {/* 3. MAVLink State */}
+              <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800">
+                <div className="text-slate-400 uppercase font-bold">MAVLink</div>
+                <div className={`font-bold mt-0.5 ${
+                  isConnected ? 'text-emerald-400' : isWaitingMavlink ? 'text-amber-400' : 'text-slate-400'
+                }`}>
+                  {isConnected ? 'CONNECTED ✓' : isWaitingMavlink ? 'WAITING ⟳' : 'DISCONNECTED'}
+                </div>
+              </div>
+
+              {/* 4. Heartbeat State */}
+              <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800">
+                <div className="text-slate-400 uppercase font-bold">Heartbeat</div>
+                <div className={`font-bold mt-0.5 ${
+                  isMavlinkHeartbeatReceived ? 'text-emerald-400' : 'text-amber-400'
+                }`}>
+                  {isMavlinkHeartbeatReceived 
+                    ? `RECEIVED (${connectionState.heartbeatHz || 1.0} Hz)` 
+                    : 'NOT RECEIVED'}
+                </div>
+              </div>
+
+              {/* 5. RX / TX Bytes Counter */}
+              <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800">
+                <div className="text-slate-400 uppercase font-bold">RX / TX Data</div>
+                <div className="font-bold text-slate-200 mt-0.5">
+                  <span className="text-emerald-400">{connectionState.bytesReceived} B</span>
+                  <span className="text-slate-500"> / </span>
+                  <span className="text-sky-400">{connectionState.bytesSent} B</span>
+                </div>
+              </div>
+
+              {/* 6. Last Packet & Msg */}
+              <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800">
+                <div className="text-slate-400 uppercase font-bold">Last Packet</div>
+                <div className="font-bold text-slate-300 truncate mt-0.5" title={diag.lastMavlinkMessageName || 'None'}>
+                  {diag.lastMavlinkMessageName ? `${diag.lastMavlinkMessageName}` : formatPacketAge()}
+                </div>
+              </div>
+            </div>
+
+            {/* HTTPS Mixed Content Alert (Section 16) */}
+            {isHttpsOrigin && esp32Proto === 'ws' && (
+              <div className="p-2.5 bg-amber-950/70 border border-amber-500/60 rounded-lg text-amber-200 text-[11px] space-y-1">
+                <div className="flex items-center space-x-1.5 font-bold text-amber-300">
+                  <ShieldAlert className="w-4 h-4 shrink-0" />
+                  <span>HTTPS Mixed Content Warning</span>
+                </div>
+                <p className="text-[10px] text-amber-300/90 leading-relaxed">
+                  You are loading this app over <strong>HTTPS (Vercel)</strong>. Standard web browsers block unencrypted <code>ws://</code> connections to local IPs (192.168.x.x) for security.
+                </p>
+                <div className="flex flex-wrap gap-2 text-[10px] pt-1">
+                  <span className="bg-slate-900 px-2 py-0.5 rounded border border-slate-700 text-purple-300 font-bold">
+                    1. Use Android Native APK (No mixed-content restrictions)
+                  </span>
+                  <span className="bg-slate-900 px-2 py-0.5 rounded border border-slate-700 text-sky-300 font-bold">
+                    2. Or open via local HTTP URL
+                  </span>
+                </div>
+              </div>
             )}
           </div>
-        </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* SECTION 2: DIRECT USB OTG / SERIAL CONTROLS                               */}
+        {/* ========================================================================= */}
+        {connectionMode === 'USB' && (
+          <>
+            {/* Dedicated Responsive State Cards Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 my-3 text-[11px]">
+              
+              {/* 1. USB Status */}
+              <div className={`p-2.5 rounded-xl border flex flex-col justify-between ${
+                isUsbDetected || isConnected
+                  ? 'bg-slate-950/80 border-emerald-500/40 text-slate-200'
+                  : 'bg-slate-950/40 border-slate-800 text-slate-400'
+              }`}>
+                <span className="text-[10px] uppercase text-slate-500 font-bold">USB Host</span>
+                <div className="flex items-center space-x-1.5 mt-1 font-bold">
+                  {isConnected || isUsbConnected ? (
+                    <>
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                      <span className="text-emerald-300">Connected ✓</span>
+                    </>
+                  ) : isUsbDetected ? (
+                    <>
+                      <CheckCircle2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                      <span className="text-sky-300">Device Detected</span>
+                    </>
+                  ) : (
+                    <>
+                      <XCircle className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                      <span>Not Detected</span>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* 2. Device Identity */}
+              <div className={`p-2.5 rounded-xl border flex flex-col justify-between ${
+                isUsbDetected || isConnected
+                  ? 'bg-slate-950/80 border-emerald-500/40 text-slate-200'
+                  : 'bg-slate-950/40 border-slate-800 text-slate-400'
+              }`}>
+                <span className="text-[10px] uppercase text-slate-500 font-bold">Device</span>
+                <div className="flex items-center space-x-1.5 mt-1 font-bold">
+                  {isUsbDetected || isConnected ? (
+                    <span className="text-emerald-300 truncate" title={diag.productName || 'Pixhawk / USB Serial'}>
+                      {diag.productName || 'Pixhawk / USB Serial'}
+                    </span>
+                  ) : (
+                    <span className="text-slate-500 font-bold">—</span>
+                  )}
+                </div>
+              </div>
+
+              {/* 3. USB Permission */}
+              <div className={`p-2.5 rounded-xl border flex flex-col justify-between ${
+                isPermissionGranted || isConnected
+                  ? 'bg-slate-950/80 border-emerald-500/40 text-slate-200'
+                  : isPermissionRequested
+                  ? 'bg-slate-950/80 border-amber-500/50 text-amber-300'
+                  : isPermissionDenied
+                  ? 'bg-rose-950/40 border-rose-500/50 text-rose-300'
+                  : 'bg-slate-950/40 border-slate-800 text-slate-400'
+              }`}>
+                <span className="text-[10px] uppercase text-slate-500 font-bold">Permission</span>
+                <div className="flex items-center space-x-1.5 mt-1 font-bold">
+                  {isPermissionGranted || isConnected ? (
+                    <span className="text-emerald-300">Granted ✓</span>
+                  ) : isPermissionRequested ? (
+                    <span className="text-amber-300">Requesting...</span>
+                  ) : isPermissionDenied ? (
+                    <span className="text-rose-300">Denied</span>
+                  ) : (
+                    <span className="text-slate-500 font-bold">—</span>
+                  )}
+                </div>
+              </div>
+
+              {/* 4. Serial Baud */}
+              <div className={`p-2.5 rounded-xl border flex flex-col justify-between ${
+                isSerialOpen || isConnected
+                  ? 'bg-slate-950/80 border-emerald-500/40 text-slate-200'
+                  : 'bg-slate-950/40 border-slate-800 text-slate-400'
+              }`}>
+                <span className="text-[10px] uppercase text-slate-500 font-bold">Serial Baud</span>
+                <div className="flex items-center space-x-1.5 mt-1 font-bold">
+                  {isSerialOpen || isConnected ? (
+                    <span className="text-emerald-300">{selectedBaud} Baud</span>
+                  ) : (
+                    <span className="text-slate-500 font-bold">—</span>
+                  )}
+                </div>
+              </div>
+
+              {/* 5. MAVLink Status */}
+              <div className={`p-2.5 rounded-xl border flex flex-col justify-between ${
+                isConnected
+                  ? 'bg-slate-950/80 border-emerald-500/40 text-slate-200'
+                  : isWaitingMavlink
+                  ? 'bg-slate-950/80 border-amber-500/50 text-amber-300'
+                  : isHeartbeatTimeout
+                  ? 'bg-amber-950/40 border-amber-500/50 text-amber-300'
+                  : 'bg-slate-950/40 border-slate-800 text-slate-400'
+              }`}>
+                <span className="text-[10px] uppercase text-slate-500 font-bold">MAVLink</span>
+                <div className="flex items-center space-x-1.5 mt-1 font-bold">
+                  {isConnected ? (
+                    <span className="text-emerald-300">Connected ✓</span>
+                  ) : isWaitingMavlink ? (
+                    <span className="text-amber-300">Waiting...</span>
+                  ) : (
+                    <span className="text-slate-500 font-bold">—</span>
+                  )}
+                </div>
+              </div>
+
+              {/* 6. Heartbeat Stream */}
+              <div className={`p-2.5 rounded-xl border flex flex-col justify-between ${
+                isConnected
+                  ? 'bg-slate-950/80 border-emerald-500/40 text-slate-200'
+                  : 'bg-slate-950/40 border-slate-800 text-slate-400'
+              }`}>
+                <span className="text-[10px] uppercase text-slate-500 font-bold">Heartbeat</span>
+                <div className="flex items-center space-x-1.5 mt-1 font-bold">
+                  {isConnected ? (
+                    <span className="text-emerald-300">SysID {connectionState.systemId || 1} ({connectionState.heartbeatHz || 1.0} Hz)</span>
+                  ) : (
+                    <span className="text-slate-500 font-bold">—</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Action Controls Bar for Direct USB OTG Mode */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800/80">
+              <div className="flex items-center space-x-2 text-xs">
+                <span className="text-slate-400 font-bold uppercase text-[10px]">Baud:</span>
+                <select
+                  value={selectedBaud}
+                  onChange={(e) => handleBaudChange(Number(e.target.value))}
+                  className="bg-slate-950 text-slate-200 text-xs px-2.5 py-1 rounded-lg border border-slate-700 cursor-pointer"
+                >
+                  <option value={57600}>57600 (Default Telemetry)</option>
+                  <option value={115200}>115200 (USB / High-Speed)</option>
+                  <option value={921600}>921600 (Fast UART)</option>
+                  <option value={38400}>38400 (Legacy)</option>
+                </select>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                {!isUsbDetected && !isConnected ? (
+                  <button
+                    onClick={handleScan}
+                    disabled={isScanning}
+                    className="px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-black uppercase tracking-wide transition flex items-center space-x-1.5 shadow-lg shadow-sky-600/30 cursor-pointer"
+                  >
+                    {isScanning ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Search className="w-3.5 h-3.5" />
+                    )}
+                    <span>SCAN USB DEVICES</span>
+                  </button>
+                ) : !isConnected ? (
+                  <button
+                    onClick={handleConnectUsb}
+                    disabled={isConnecting}
+                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white rounded-lg text-xs font-black uppercase tracking-wide transition flex items-center space-x-1.5 shadow-lg shadow-emerald-600/30 cursor-pointer animate-pulse"
+                  >
+                    {isConnecting ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Usb className="w-3.5 h-3.5" />
+                    )}
+                    <span>CONNECT PIXHAWK</span>
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleDisconnect}
+                    className="px-3 py-1.5 bg-rose-950/80 hover:bg-rose-900 border border-rose-600 text-rose-300 rounded-lg text-xs font-bold transition flex items-center space-x-1 cursor-pointer"
+                  >
+                    <PowerOff className="w-3.5 h-3.5" />
+                    <span>Disconnect</span>
+                  </button>
+                )}
+
+                <button
+                  onClick={() => setShowDiagnostics(true)}
+                  className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-sky-400 rounded-lg text-xs font-bold transition flex items-center space-x-1 border border-slate-700 cursor-pointer"
+                >
+                  <Sliders className="w-3.5 h-3.5" />
+                  <span>Diagnostics</span>
+                </button>
+
+                {onOpenHelp && (
+                  <button
+                    onClick={onOpenHelp}
+                    className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-300 rounded-lg text-xs font-bold transition flex items-center space-x-1 border border-slate-700 cursor-pointer"
+                  >
+                    <HelpCircle className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">OTG Guide</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          </>
+        )}
 
         {/* Diagnostic Failure / Timeout Notification Panels */}
         {isHeartbeatTimeout ? (
@@ -491,26 +711,19 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
             <div className="flex items-start space-x-2">
               <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
               <div>
-                <strong className="text-amber-300">USB connected, but no MAVLink heartbeat received.</strong>
+                <strong className="text-amber-300">
+                  {isEsp32Mode ? 'ESP32 connected, but Pixhawk MAVLink heartbeat not received.' : 'USB connected, but no MAVLink heartbeat received.'}
+                </strong>
                 <p className="text-[11px] text-amber-300/80 mt-0.5">
-                  The serial port is open, but the Pixhawk autopilot is not responding with valid MAVLink heartbeat packets.
+                  The transport link is active, but the Pixhawk autopilot is not returning valid MAVLink heartbeat packets. Check TELEM2 UART wiring (TX➔RX, RX➔TX, GND➔GND) and verify Pixhawk power.
                 </p>
               </div>
             </div>
-            {/* Detailed Diagnostic Checklist Box */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 bg-slate-950/80 p-2 rounded-lg border border-amber-500/30 text-[10px]">
-              <div>• USB device detected: <span className="text-emerald-400 font-bold">YES</span></div>
-              <div>• USB permission: <span className="text-emerald-400 font-bold">GRANTED</span></div>
-              <div>• Serial port: <span className="text-emerald-400 font-bold">OPEN</span></div>
-              <div>• Serial data: <span className={diag.serialDataReceived ? "text-emerald-400 font-bold" : "text-amber-400 font-bold"}>{diag.serialDataReceived ? "YES" : "NO"}</span></div>
-              <div>• MAVLink heartbeat: <span className="text-rose-400 font-bold">NO</span></div>
-              <div>• Baud rate: <span className="text-sky-300 font-bold">{selectedBaud}</span></div>
-            </div>
             <div className="flex items-center justify-between pt-1">
-              <span className="text-[11px] text-amber-300/70">Verify Pixhawk power, wait 5s for bootloader, or switch baud rate.</span>
+              <span className="text-[11px] text-amber-300/70">Verify TELEM2 baud rate = 57600 (SERIAL2_BAUD = 57).</span>
               <div className="flex items-center space-x-1.5">
                 <button
-                  onClick={handleConnect}
+                  onClick={isEsp32Mode ? handleConnectEsp32 : handleConnectUsb}
                   className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-lg text-[11px] cursor-pointer"
                 >
                   Retry
@@ -524,77 +737,139 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
               </div>
             </div>
           </div>
-        ) : isNoSerialData ? (
-          <div className="mt-3 p-3 bg-amber-950/50 border border-amber-500/50 rounded-xl flex items-center justify-between text-xs text-amber-200 gap-2">
-            <div className="flex items-center space-x-2">
-              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
-              <span>
-                <strong>Serial port opened, but no serial data received.</strong> USB device may require external battery power.
-              </span>
-            </div>
-            <button
-              onClick={handleConnect}
-              className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-lg text-[11px] cursor-pointer shrink-0"
-            >
-              Retry Connection
-            </button>
-          </div>
         ) : phase === 'PERMISSION_DENIED' ? (
-          <div className="mt-3 p-3 bg-rose-950/50 border border-rose-500/50 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between text-xs text-rose-200 gap-2">
+          <div className="mt-3 p-3 bg-rose-950/50 border border-rose-500/50 rounded-xl flex items-center justify-between text-xs text-rose-200">
             <div className="flex items-center space-x-2">
               <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-              <span>USB permission denied. Please allow USB access and reconnect the Pixhawk.</span>
+              <span>USB permission denied. Please allow USB access on your phone.</span>
             </div>
             <button
               onClick={handleRequestPermission}
-              className="px-3 py-1 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-lg text-xs cursor-pointer shrink-0"
+              className="px-3 py-1 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-lg text-xs cursor-pointer"
             >
               Request Permission
             </button>
           </div>
-        ) : phase === 'CONNECTION_LOST' ? (
-          <div className="mt-3 p-3 bg-rose-950/50 border border-rose-500/50 rounded-xl flex items-center justify-between text-xs text-rose-200">
-            <div className="flex items-center space-x-2">
-              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-              <span><strong>Pixhawk connection lost.</strong> Reconnect the USB cable or OTG adapter.</span>
-            </div>
-            <button
-              onClick={handleConnect}
-              className="px-2.5 py-1 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded-lg text-[11px] cursor-pointer"
-            >
-              Scan &amp; Reconnect
-            </button>
-          </div>
-        ) : !isUsbDetected && !isConnected ? (
-          <div className="mt-3 p-2.5 bg-slate-950/60 border border-slate-800 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
-            <div className="flex items-center space-x-2">
-              <ShieldCheck className="w-4 h-4 text-sky-400 shrink-0" />
-              <span>
-                <strong>No USB device detected.</strong> Connect Phone → OTG Adapter → Pixhawk USB.
-              </span>
-            </div>
-            <div className="flex items-center space-x-2">
-              <button
-                onClick={handleScan}
-                className="px-2.5 py-1 bg-sky-900/60 hover:bg-sky-800 text-sky-300 font-bold rounded-lg text-[11px] border border-sky-600/40 transition cursor-pointer"
-              >
-                Scan USB
-              </button>
-              <button
-                onClick={() => mavlinkService.switchToSimulationMode()}
-                className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-purple-300 font-bold rounded-lg text-[11px] border border-purple-500/30 transition cursor-pointer"
-              >
-                Bench Simulator
-              </button>
-            </div>
-          </div>
-        ) : isWaitingMavlink ? (
-          <div className="mt-3 p-2.5 bg-amber-950/40 border border-amber-500/40 rounded-xl flex items-center space-x-2 text-xs text-amber-200">
-            <Loader2 className="w-4 h-4 text-amber-400 animate-spin shrink-0" />
-            <span>Serial connection active. Waiting for MAVLink heartbeat from Pixhawk…</span>
-          </div>
         ) : null}
       </div>
+
+      {/* ESP32-S3 WI-FI PROVISIONING & TELEM2 WIRING GUIDE MODAL */}
+      {showEsp32Guide && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-5 font-mono">
+          <div className="bg-slate-900 border-2 border-purple-500/60 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-4 sm:p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center space-x-2.5">
+                <div className="p-2 bg-purple-950 rounded-xl border border-purple-500/50 text-purple-400">
+                  <Wifi className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-black text-sm sm:text-base text-white uppercase tracking-wider">
+                    ESP32-S3 Wi-Fi Provisioning &amp; TELEM2 Wiring Guide
+                  </h3>
+                  <p className="text-xs text-purple-300">Transparent MAVLink Bridge Architecture</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowEsp32Guide(false)}
+                className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs transition cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* 1. Hardware Architecture & Wiring */}
+            <div className="space-y-2">
+              <div className="text-xs font-black uppercase text-purple-300 flex items-center space-x-1.5">
+                <Cable className="w-4 h-4" />
+                <span>1. Pixhawk 2.4.8 TELEM2 Pinout &amp; Wiring</span>
+              </div>
+              <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 text-[11px] text-slate-300 space-y-2">
+                <table className="w-full text-left border-collapse text-[11px]">
+                  <thead>
+                    <tr className="border-b border-slate-800 text-slate-400 font-bold">
+                      <th className="py-1">TELEM2 Pin</th>
+                      <th className="py-1">Signal</th>
+                      <th className="py-1">ESP32-S3 Target Pin</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60 text-slate-200">
+                    <tr>
+                      <td className="py-1 font-bold text-amber-400">Pin 1</td>
+                      <td>+5V Power</td>
+                      <td className="font-bold text-emerald-400">ESP32-S3 5V/VIN Input</td>
+                    </tr>
+                    <tr>
+                      <td className="py-1 font-bold text-sky-400">Pin 2</td>
+                      <td>TX (Transmit)</td>
+                      <td className="font-bold text-sky-300">ESP32-S3 RX (UART Pin)</td>
+                    </tr>
+                    <tr>
+                      <td className="py-1 font-bold text-sky-400">Pin 3</td>
+                      <td>RX (Receive)</td>
+                      <td className="font-bold text-sky-300">ESP32-S3 TX (UART Pin)</td>
+                    </tr>
+                    <tr>
+                      <td className="py-1 text-slate-500">Pin 4</td>
+                      <td>CTS</td>
+                      <td className="text-slate-500">NOT CONNECTED</td>
+                    </tr>
+                    <tr>
+                      <td className="py-1 text-slate-500">Pin 5</td>
+                      <td>RTS</td>
+                      <td className="text-slate-500">NOT CONNECTED</td>
+                    </tr>
+                    <tr>
+                      <td className="py-1 font-bold text-slate-400">Pin 6</td>
+                      <td>GND</td>
+                      <td className="font-bold text-slate-300">ESP32-S3 GND</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div className="p-2 bg-rose-950/50 border border-rose-500/40 rounded-lg text-rose-300 text-[10px]">
+                  ⚠️ <strong>SAFETY CAUTION:</strong> Do NOT connect Pixhawk 5V output to the ESP32 3.3V pin. Connect to ESP32 5V / VIN pin only.
+                </div>
+              </div>
+            </div>
+
+            {/* 2. Step-by-Step Wi-Fi Provisioning Workflow */}
+            <div className="space-y-2">
+              <div className="text-xs font-black uppercase text-purple-300 flex items-center space-x-1.5">
+                <Globe className="w-4 h-4" />
+                <span>2. ESP32-S3 Wi-Fi Provisioning Workflow</span>
+              </div>
+              <ol className="list-decimal list-inside space-y-1.5 bg-slate-950 p-3 rounded-xl border border-slate-800 text-[11px] text-slate-300">
+                <li>Power on the ESP32-S3. It will broadcast its setup Access Point: <strong className="text-purple-300">DRONE_ESP</strong>.</li>
+                <li>Connect your Phone / Laptop Wi-Fi to <strong className="text-purple-300">DRONE_ESP</strong>.</li>
+                <li>Open a browser and navigate to: <strong className="text-emerald-400">http://192.168.4.1</strong>.</li>
+                <li>The ESP32 page will scan nearby 2.4 GHz Wi-Fi networks. Select your network SSID and enter the password.</li>
+                <li>ESP32 saves credentials, shuts down the <code className="text-purple-300">DRONE_ESP</code> AP, connects to the Wi-Fi, and starts the MAVLink WebSocket server on port <strong className="text-emerald-400">8080</strong>.</li>
+                <li>Reconnect your phone to the same Wi-Fi, enter the ESP32 IP address in this app, and tap <strong className="text-purple-400">CONNECT</strong>.</li>
+              </ol>
+            </div>
+
+            {/* 3. Pixhawk ArduPilot Parameter Config */}
+            <div className="space-y-2">
+              <div className="text-xs font-black uppercase text-purple-300 flex items-center space-x-1.5">
+                <Sliders className="w-4 h-4" />
+                <span>3. Pixhawk Parameters for TELEM2</span>
+              </div>
+              <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 text-[11px] text-slate-300 space-y-1">
+                <div>• <strong>SERIAL2_PROTOCOL = 2</strong> (MAVLink2)</div>
+                <div>• <strong>SERIAL2_BAUD = 57</strong> (57600 baud rate)</div>
+              </div>
+            </div>
+
+            <div className="pt-2 flex justify-end">
+              <button
+                onClick={() => setShowEsp32Guide(false)}
+                className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs rounded-xl transition cursor-pointer"
+              >
+                Got It, Close Guide
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Complete Connection Diagnostics Screen Modal */}
       <SerialDiagnosticsModal

@@ -5,6 +5,7 @@ export type TransportType =
   | 'WEBUSB' 
   | 'UDP' 
   | 'TCP' 
+  | 'ESP32_WEBSOCKET'
   | 'SIMULATOR';
 
 export interface TransportStateEvent {

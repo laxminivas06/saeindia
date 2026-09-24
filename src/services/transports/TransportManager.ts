@@ -6,10 +6,12 @@ import { WebSerialTransport } from './WebSerialTransport';
 import { WebUsbTransport } from './WebUsbTransport';
 import { UdpTransport } from './UdpTransport';
 import { SimulatorTransport } from './SimulatorTransport';
+import { Esp32WebSocketTransport } from './Esp32WebSocketTransport';
 
 export class TransportManager {
   private transports: Map<string, MavlinkTransport> = new Map();
   private activeTransport: MavlinkTransport;
+  private esp32Transport: Esp32WebSocketTransport;
   
   private dataListeners: Set<(chunk: Uint8Array) => void> = new Set();
   private stateListeners: Set<(event: TransportStateEvent) => void> = new Set();
@@ -24,12 +26,16 @@ export class TransportManager {
     const webUsb = new WebUsbTransport();
     const udp = new UdpTransport();
     const sim = new SimulatorTransport();
+    const esp32 = new Esp32WebSocketTransport();
+
+    this.esp32Transport = esp32;
 
     this.transports.set(androidUsb.id, androidUsb);
     this.transports.set(iosUsb.id, iosUsb);
     this.transports.set(webSerial.id, webSerial);
     this.transports.set(webUsb.id, webUsb);
     this.transports.set(udp.id, udp);
+    this.transports.set(esp32.id, esp32);
     this.transports.set(sim.id, sim);
 
     // Auto-select primary transport based on environment
@@ -118,6 +124,15 @@ export class TransportManager {
 
   public async getDiagnostics(): Promise<Record<string, any>> {
     return this.activeTransport.getDiagnostics();
+  }
+
+  public getEsp32Transport(): Esp32WebSocketTransport {
+    return this.esp32Transport;
+  }
+
+  public async connectEsp32(options?: { host?: string; port?: number; protocol?: 'ws' | 'wss'; baudRate?: number }): Promise<boolean> {
+    this.setTransport('esp32_websocket');
+    return this.activeTransport.connect(options);
   }
 
   public subscribeData(listener: (chunk: Uint8Array) => void): () => void {

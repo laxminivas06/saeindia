@@ -79,6 +79,7 @@ class UsbHostService {
       case 'IOS_ACCESSORY': return 'IOS_ACCESSORY';
       case 'WEBSERIAL': return 'WEBSERIAL';
       case 'WEBUSB': return 'WEBUSB';
+      case 'ESP32_WEBSOCKET': return 'ESP32_WEBSOCKET';
       case 'UDP': return 'UDP';
       case 'TCP': return 'TCP';
       default: return 'SIMULATOR';
@@ -98,6 +99,10 @@ class UsbHostService {
   public async autoConnect(baudRate: number = 57600): Promise<boolean> {
     this.currentBaudRate = baudRate;
     return await transportManager.connect({ baudRate });
+  }
+
+  public async connectEsp32(options?: { host?: string; port?: number; protocol?: 'ws' | 'wss'; baudRate?: number }): Promise<boolean> {
+    return await transportManager.connectEsp32(options);
   }
 
   public async requestUsbPermission(): Promise<boolean> {

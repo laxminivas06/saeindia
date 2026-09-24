@@ -2,6 +2,7 @@ import React from 'react';
 import { DroneTelemetry, HomePoint, MissionState, PreFlightChecklist as ChecklistType } from '../../types/mission';
 import { PixhawkConnectionState } from '../../types/mavlink';
 import { RunnerLinkState } from '../../types/runner';
+import { mavlinkService } from '../../services/mavlinkService';
 import { MissionTimer } from '../common/MissionTimer';
 import { TelemetryHUD } from '../common/TelemetryHUD';
 import { StatusBadge } from '../common/StatusBadge';
@@ -14,12 +15,14 @@ import {
   RotateCcw, 
   ShieldAlert, 
   Plane, 
-  Info,
-  CheckCircle,
-  Radio,
-  ArrowRight,
-  Zap,
-  Power
+  Info, 
+  CheckCircle, 
+  Radio, 
+  ArrowRight, 
+  Zap, 
+  Power,
+  PowerOff,
+  ShieldCheck
 } from 'lucide-react';
 
 interface GroundStationDashboardProps {
@@ -95,7 +98,7 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
         <div className="bg-slate-950/80 px-3 py-2 rounded-lg border border-slate-800 text-[11px] text-slate-400 flex items-center space-x-2">
           <Info className="w-4 h-4 text-sky-400 shrink-0" />
           <span>
-            <strong>GCS Focus:</strong> Pre-flight setup, Start Mission, & Telemetry monitoring. QR data sends directly to Runner.
+            <strong>GCS Focus:</strong> Pre-flight setup, Start Mission, &amp; Telemetry monitoring. QR data sends directly to Runner.
           </span>
         </div>
       </div>
@@ -111,26 +114,51 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
             missionState={missionState}
           />
 
-          {/* Primary Action Button: START MISSION & EMERGENCY RTL */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 font-mono">
+          {/* Primary Action Button: ARM/DISARM + START MISSION + EMERGENCY RTL */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 font-mono">
+            {!telemetry.isArmed ? (
+              <button
+                onClick={() => mavlinkService.armDrone()}
+                disabled={!pixhawkState.isConnected}
+                className={`py-3.5 sm:py-4 px-3 rounded-xl font-black text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center space-x-2 transition shadow-lg cursor-pointer ${
+                  pixhawkState.isConnected
+                    ? 'bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white shadow-emerald-600/30'
+                    : 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
+                }`}
+                title="Arm Drone Motors"
+              >
+                <ShieldCheck className="w-4 h-4" />
+                <span>ARM</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => mavlinkService.disarmDrone()}
+                className="py-3.5 sm:py-4 px-3 rounded-xl bg-rose-950 hover:bg-rose-900 border border-rose-500 text-rose-200 font-black text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center space-x-2 shadow-lg transition cursor-pointer"
+                title="Disarm Drone Motors"
+              >
+                <PowerOff className="w-4 h-4 text-rose-400" />
+                <span>DISARM</span>
+              </button>
+            )}
+
             <button
               onClick={onStartMission}
               disabled={!isReadyForMission || isMissionActive}
-              className={`py-3.5 sm:py-4 px-4 rounded-xl font-black text-sm sm:text-base uppercase tracking-wider flex items-center justify-center space-x-2.5 transition shadow-lg ${
+              className={`py-3.5 sm:py-4 px-3 rounded-xl font-black text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center space-x-2 transition shadow-lg ${
                 isReadyForMission && !isMissionActive
-                  ? 'bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white shadow-emerald-600/30 cursor-pointer animate-pulse'
+                  ? 'bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white shadow-sky-600/30 cursor-pointer animate-pulse'
                   : 'bg-slate-800/80 text-slate-500 border border-slate-700/50 cursor-not-allowed'
               }`}
             >
-              <Play className="w-5 h-5 fill-current" />
+              <Play className="w-4 h-4 fill-current" />
               <span>START MISSION</span>
             </button>
 
             <button
               onClick={onEmergencyRTL}
-              className="py-3.5 sm:py-4 px-4 rounded-xl font-black text-sm sm:text-base uppercase tracking-wider flex items-center justify-center space-x-2.5 bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white shadow-lg shadow-rose-600/30 transition cursor-pointer"
+              className="py-3.5 sm:py-4 px-3 rounded-xl font-black text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center space-x-2 bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white shadow-lg shadow-rose-600/30 transition cursor-pointer"
             >
-              <ShieldAlert className="w-5 h-5" />
+              <ShieldAlert className="w-4 h-4" />
               <span>EMERGENCY RTL</span>
             </button>
           </div>

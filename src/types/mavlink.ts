@@ -27,6 +27,7 @@ export interface MAVLinkPacket {
 
 export type FlightControllerConnection = 
   | 'USB_SERIAL' 
+  | 'ESP32_WEBSOCKET'
   | 'UDP_TELEMETRY' 
   | 'TCP_CLIENT' 
   | 'BLUETOOTH' 
@@ -94,12 +95,15 @@ export interface UsbDeviceDiagnostics {
   componentId?: number;
   autopilotType?: string;
   vehicleType?: string;
-  driverType: 'NATIVE_ANDROID_USB' | 'IOS_ACCESSORY' | 'WEBSERIAL' | 'WEBUSB' | 'UDP' | 'TCP' | 'SIMULATOR';
+  driverType: 'NATIVE_ANDROID_USB' | 'IOS_ACCESSORY' | 'WEBSERIAL' | 'WEBUSB' | 'UDP' | 'TCP' | 'ESP32_WEBSOCKET' | 'SIMULATOR';
   lastError?: string;
   hostPowerStatus?: 'HOST_ACTIVE' | 'DEVICE_POWERED' | 'CHECK_EXTERNAL_POWER' | 'UNKNOWN';
   isUsbHostSupported?: boolean;
   connectedDeviceCount?: number;
   serialDataReceived?: boolean;
+  lastMavlinkMessageName?: string;
+  lastMavlinkMessageId?: number;
+  lastPacketTimestamp?: number;
 }
 
 export interface PixhawkStatusMessage {

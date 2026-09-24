@@ -497,6 +497,28 @@ class MAVLinkService {
     return await usbHostService.autoConnect(baudRate);
   }
 
+  /**
+   * 1-Click ESP32-S3 Wi-Fi Bridge Connection (WebSocket)
+   */
+  public async connectEsp32(
+    host: string = '192.168.4.1',
+    port: number = 8080,
+    protocol: 'ws' | 'wss' = 'ws',
+    baudRate: number = 57600
+  ): Promise<boolean> {
+    if (this.simInterval) {
+      clearInterval(this.simInterval);
+      this.simInterval = null;
+    }
+    this.connectionState.connectionType = 'ESP32_WEBSOCKET';
+    this.connectionState.portOrAddress = `${protocol}://${host}:${port}`;
+    this.connectionState.baudRate = baudRate;
+    this.connectionState.isRealHardware = true;
+    this.connectionState.diagnostics.serialDataReceived = false;
+    this.logDiagnostic('TRANSPORT', `Initiating ESP32-S3 Wi-Fi bridge connection to ${protocol}://${host}:${port} (${baudRate} baud)…`, 'info');
+    return await usbHostService.connectEsp32({ host, port, protocol, baudRate });
+  }
+
   public async scanUsbDevices(): Promise<any[]> {
     this.logDiagnostic('USB', 'Scanning connected USB devices on USB Host...', 'info');
     return await usbHostService.scanUsbDevices();
@@ -538,51 +560,80 @@ class MAVLinkService {
   }
 
   /**
-   * MAVLink Byte Stream Parser (Supports MAVLink 1.0 & MAVLink 2.0)
+   * MAVLink Byte Stream Parser (Sliding Window Ring Buffer for MAVLink 1.0 & 2.0)
    */
   private processIncomingSerialBytes(chunk: Uint8Array) {
-    if (!this.connectionState.diagnostics.serialDataReceived && chunk.length > 0) {
+    if (chunk.length === 0) return;
+
+    this.connectionState.bytesReceived += chunk.length;
+    this.connectionState.diagnostics.lastPacketTimestamp = Date.now();
+
+    if (!this.connectionState.diagnostics.serialDataReceived) {
       this.connectionState.diagnostics.serialDataReceived = true;
       this.clearSerialDataCheckTimer();
-      this.logDiagnostic('USB', `[SERIAL] Serial data detected ✓ (${chunk.length} bytes received). Passing to MAVLink parser…`, 'success');
+      this.logDiagnostic('TRANSPORT', `[RX DATA] Data detected ✓ (${chunk.length} bytes received). Passing to MAVLink parser…`, 'success');
       if (this.connectionState.phase === 'SERIAL_OPEN') {
         this.connectionState.phase = 'WAITING_FOR_MAVLINK';
-        this.connectionState.phaseMessage = 'Serial data detected ✓. Waiting for MAVLink heartbeat…';
+        this.connectionState.phaseMessage = 'Data link open ✓. Waiting for MAVLink heartbeat…';
         this.notifyConnection();
       }
     }
 
-    for (let i = 0; i < chunk.length; i++) {
-      const b = chunk[i];
+    // Append chunk to rxBuffer safely
+    if (this.rxBufferLen + chunk.length > this.rxBuffer.length) {
+      const newBuf = new Uint8Array(Math.max(this.rxBuffer.length * 2, this.rxBufferLen + chunk.length + 1024));
+      newBuf.set(this.rxBuffer.subarray(0, this.rxBufferLen), 0);
+      this.rxBuffer = newBuf;
+    }
+    this.rxBuffer.set(chunk, this.rxBufferLen);
+    this.rxBufferLen += chunk.length;
 
-      if (this.rxBufferLen === 0) {
-        if (b === 0xFE || b === 0xFD) { // MAVLink v1 (0xFE) or MAVLink v2 (0xFD)
-          this.rxBuffer[0] = b;
-          this.rxBufferLen = 1;
-        }
+    // Sliding window packet extractor
+    let offset = 0;
+    while (offset < this.rxBufferLen) {
+      const magic = this.rxBuffer[offset];
+      if (magic !== 0xFE && magic !== 0xFD) {
+        offset++;
         continue;
       }
 
-      this.rxBuffer[this.rxBufferLen++] = b;
-      const isV2 = this.rxBuffer[0] === 0xFD;
+      const remaining = this.rxBufferLen - offset;
 
-      if (!isV2 && this.rxBufferLen >= 6) { // MAVLink 1 header
-        const payloadLen = this.rxBuffer[1];
-        const totalLen = 6 + payloadLen + 2;
-        if (this.rxBufferLen >= totalLen) {
-          this.decodeMavlink1Packet(this.rxBuffer.subarray(0, totalLen));
-          this.rxBufferLen = 0;
-        }
-      } else if (isV2 && this.rxBufferLen >= 10) { // MAVLink 2 header
-        const payloadLen = this.rxBuffer[1];
-        const totalLen = 10 + payloadLen + 2;
-        if (this.rxBufferLen >= totalLen) {
-          this.decodeMavlink2Packet(this.rxBuffer.subarray(0, totalLen));
-          this.rxBufferLen = 0;
-        }
+      // MAVLink 1.0 (magic = 0xFE)
+      if (magic === 0xFE) {
+        if (remaining < 6) break;
+        const payloadLen = this.rxBuffer[offset + 1];
+        const packetLen = 6 + payloadLen + 2;
+        if (remaining < packetLen) break;
+
+        const frame = this.rxBuffer.subarray(offset, offset + packetLen);
+        this.decodeMavlink1Packet(frame);
+        offset += packetLen;
+        continue;
       }
 
-      if (this.rxBufferLen >= 280) {
+      // MAVLink 2.0 (magic = 0xFD)
+      if (magic === 0xFD) {
+        if (remaining < 10) break;
+        const payloadLen = this.rxBuffer[offset + 1];
+        const incompatFlags = this.rxBuffer[offset + 2];
+        const signatureLen = (incompatFlags & 0x01) ? 13 : 0;
+        const packetLen = 10 + payloadLen + 2 + signatureLen;
+        if (remaining < packetLen) break;
+
+        const frame = this.rxBuffer.subarray(offset, offset + packetLen);
+        this.decodeMavlink2Packet(frame);
+        offset += packetLen;
+        continue;
+      }
+    }
+
+    // Slide remaining unparsed bytes to front of buffer
+    if (offset > 0) {
+      if (offset < this.rxBufferLen) {
+        this.rxBuffer.copyWithin(0, offset, this.rxBufferLen);
+        this.rxBufferLen -= offset;
+      } else {
         this.rxBufferLen = 0;
       }
     }
@@ -620,6 +671,21 @@ class MAVLinkService {
   ) {
     const now = Date.now();
     this.connectionState.diagnostics.totalPacketsReceived++;
+
+    const msgNames: Record<number, string> = {
+      0: 'HEARTBEAT',
+      1: 'SYS_STATUS',
+      24: 'GPS_RAW_INT',
+      30: 'ATTITUDE',
+      33: 'GLOBAL_POSITION_INT',
+      74: 'VFR_HUD',
+      77: 'COMMAND_ACK',
+      147: 'BATTERY_STATUS',
+      253: 'STATUSTEXT'
+    };
+    this.connectionState.diagnostics.lastMavlinkMessageName = msgNames[msgId] || `MSG_${msgId}`;
+    this.connectionState.diagnostics.lastMavlinkMessageId = msgId;
+    this.connectionState.diagnostics.lastPacketTimestamp = now;
 
     const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
 
@@ -904,6 +970,23 @@ class MAVLinkService {
       this.telemetry.isArmed = true;
       this.telemetry.flightMode = 'AUTO';
       this.telemetry.targetAltitude = targetAltMeters;
+      this.notifyTelemetry();
+      return true;
+    }
+  }
+
+  public async commandStartMission(): Promise<boolean> {
+    if (!this.connectionState.isConnected && !this.simInterval) {
+      this.logDiagnostic('ERROR', 'Cannot start mission: MAVLink not connected', 'error');
+      return false;
+    }
+    this.addStatusMessage('NOTICE', 5, 'Sending MAVLink MISSION_START Command to Pixhawk FC...');
+    if (this.connectionState.isRealHardware) {
+      await this.setFlightMode('AUTO');
+      await this.sendMavlinkCommandLong(300 /* MAV_CMD_MISSION_START */, 0, 0, 0, 0, 0, 0, 0);
+      return true;
+    } else {
+      this.telemetry.flightMode = 'AUTO';
       this.notifyTelemetry();
       return true;
     }
