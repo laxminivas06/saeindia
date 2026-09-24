@@ -41,7 +41,7 @@ export interface MavlinkTransport {
   readonly name: string;
   readonly type: TransportType;
   
-  connect(options?: { baudRate?: number; host?: string; port?: number }): Promise<boolean>;
+  connect(options?: Record<string, any>): Promise<boolean>;
   disconnect(): Promise<void>;
   send(data: Uint8Array): Promise<boolean>;
   

@@ -130,7 +130,7 @@ export class TransportManager {
     return this.esp32Transport;
   }
 
-  public async connectEsp32(options?: { host?: string; port?: number; protocol?: 'ws' | 'wss'; baudRate?: number }): Promise<boolean> {
+  public async connectEsp32(options?: import('./Esp32WebSocketTransport').Esp32WebSocketOptions): Promise<boolean> {
     this.setTransport('esp32_websocket');
     return this.activeTransport.connect(options);
   }

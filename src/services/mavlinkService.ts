@@ -172,6 +172,7 @@ class MAVLinkService {
   private heartbeatWatchdogTimer: any = null;
   private heartbeatWaitingTimer: any = null;
   private serialDataCheckTimer: any = null;
+  private gcsHeartbeatTimer: any = null;
   private heartbeatWaitStartTime: number = 0;
 
   // Simulator Interval (Only active when in SIMULATED mode)
@@ -179,6 +180,46 @@ class MAVLinkService {
   private simWaypoints: Array<{ lat: number; lon: number; alt: number }> = [];
   private currentWpIndex: number = 0;
   private searchProgressCount: number = 0;
+
+  private startGcsHeartbeat() {
+    if (this.gcsHeartbeatTimer) return;
+    this.gcsHeartbeatTimer = setInterval(() => {
+      if (this.connectionState.isConnected && !this.simInterval) {
+        this.sendGcsHeartbeat();
+      }
+    }, 1000);
+  }
+
+  private stopGcsHeartbeat() {
+    if (this.gcsHeartbeatTimer) {
+      clearInterval(this.gcsHeartbeatTimer);
+      this.gcsHeartbeatTimer = null;
+    }
+  }
+
+  public async sendGcsHeartbeat(): Promise<boolean> {
+    try {
+      if (!this.connectionState.isConnected || this.simInterval) return false;
+      // MAVLink v1 HEARTBEAT (msgId = 0, payload len = 9)
+      const payload = new Uint8Array(9);
+      const view = new DataView(payload.buffer);
+      view.setUint32(0, 0, true); // custom_mode
+      view.setUint8(4, 6);        // type = MAV_TYPE_GCS (6)
+      view.setUint8(5, 8);        // autopilot = MAV_AUTOPILOT_INVALID (8)
+      view.setUint8(6, 0);        // base_mode
+      view.setUint8(7, 4);        // system_status = MAV_STATE_ACTIVE (4)
+      view.setUint8(8, 3);        // mavlink_version = 3
+
+      const packet = this.buildMavlink1Frame(0 /* HEARTBEAT */, payload);
+      const success = await usbHostService.sendBytes(packet);
+      if (success) {
+        this.connectionState.bytesSent += packet.length;
+      }
+      return success;
+    } catch {
+      return false;
+    }
+  }
 
   constructor() {
     this.logDiagnostic('SYSTEM', 'MAVLink Engine Initialized. Ready for Pixhawk USB OTG auto-detection.', 'info');
@@ -515,25 +556,76 @@ class MAVLinkService {
   }
 
   /**
-   * 1-Click ESP32-S3 Wi-Fi Bridge Connection (WebSocket)
+   * 1-Click ESP32-S3 Wireless Bridge Connection (WebSocket)
+   * Supports explicit LOCAL (ws://) and SECURE (wss://) connection modes.
    */
-  public async connectEsp32(
-    host: string = '192.168.4.1',
-    port: number = 8080,
-    protocol: 'ws' | 'wss' = 'ws',
-    baudRate: number = 57600
-  ): Promise<boolean> {
+  public async connectEsp32(options?: {
+    mode?: 'LOCAL' | 'SECURE';
+    host?: string;
+    port?: number;
+    secureEndpoint?: string;
+    protocol?: 'ws' | 'wss';
+    baudRate?: number;
+  } | string, port: number = 8080, protocol: 'ws' | 'wss' = 'ws', baudRate: number = 57600): Promise<boolean> {
     if (this.simInterval) {
       clearInterval(this.simInterval);
       this.simInterval = null;
     }
+
+    let resolvedOptions: {
+      mode: 'LOCAL' | 'SECURE';
+      host: string;
+      port: number;
+      secureEndpoint: string;
+      protocol: 'ws' | 'wss';
+      baudRate: number;
+    };
+
+    if (typeof options === 'string') {
+      // Legacy string overload: connectEsp32(host, port, protocol, baudRate)
+      resolvedOptions = {
+        mode: protocol === 'wss' ? 'SECURE' : 'LOCAL',
+        host: options.trim(),
+        port,
+        secureEndpoint: `${options}:${port}`,
+        protocol,
+        baudRate
+      };
+    } else {
+      const mode = options?.mode || 'LOCAL';
+      const host = (options?.host || '192.168.4.1').trim();
+      const p = options?.port || 8080;
+      const secureEp = (options?.secureEndpoint || 'relay.example.com:8443').trim();
+      const proto = options?.protocol || (mode === 'SECURE' ? 'wss' : 'ws');
+      const baud = options?.baudRate || 57600;
+
+      resolvedOptions = {
+        mode,
+        host,
+        port: p,
+        secureEndpoint: secureEp,
+        protocol: proto,
+        baudRate: baud
+      };
+    }
+
+    const resolvedUrl = resolvedOptions.mode === 'SECURE'
+      ? `wss://${resolvedOptions.secureEndpoint.replace(/^wss?:\/\//i, '')}`
+      : `ws://${resolvedOptions.host}:${resolvedOptions.port}`;
+
     this.connectionState.connectionType = 'ESP32_WEBSOCKET';
-    this.connectionState.portOrAddress = `${protocol}://${host}:${port}`;
-    this.connectionState.baudRate = baudRate;
+    this.connectionState.portOrAddress = resolvedUrl;
+    this.connectionState.baudRate = resolvedOptions.baudRate;
     this.connectionState.isRealHardware = true;
     this.connectionState.diagnostics.serialDataReceived = false;
-    this.logDiagnostic('TRANSPORT', `Initiating ESP32-S3 Wi-Fi bridge connection to ${protocol}://${host}:${port} (${baudRate} baud)…`, 'info');
-    return await usbHostService.connectEsp32({ host, port, protocol, baudRate });
+
+    this.logDiagnostic(
+      'TRANSPORT',
+      `[WS] Initiating ${resolvedOptions.mode} bridge connection to ${resolvedUrl} (${resolvedOptions.baudRate} baud)…`,
+      'info'
+    );
+
+    return await usbHostService.connectEsp32(resolvedOptions);
   }
 
   public async checkEsp32Http(host?: string): Promise<{ reachable: boolean; latencyMs?: number; message?: string }> {
@@ -556,6 +648,7 @@ class MAVLinkService {
   public async cleanupMavlinkConnection(): Promise<void> {
     this.clearHeartbeatWaitTimer();
     this.clearSerialDataCheckTimer();
+    this.stopGcsHeartbeat();
     if (this.simInterval) {
       clearInterval(this.simInterval);
       this.simInterval = null;
@@ -781,6 +874,7 @@ class MAVLinkService {
         }
 
         if (wasNotConnected) {
+          this.startGcsHeartbeat();
           this.logDiagnostic('MAVLINK', `[MAVLINK] HEARTBEAT received ✓! SysID: ${sysId}, CompID: ${compId}, Autopilot: ${this.connectionState.autopilotType}, Type: ${this.connectionState.diagnostics.vehicleType}`, 'success');
           this.addStatusMessage('INFO', 6, `Pixhawk Connected: Heartbeat Received from SysID ${sysId} (${this.connectionState.autopilotType})`);
         }

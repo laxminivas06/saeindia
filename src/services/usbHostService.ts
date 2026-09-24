@@ -101,7 +101,7 @@ class UsbHostService {
     return await transportManager.connect({ baudRate });
   }
 
-  public async connectEsp32(options?: { host?: string; port?: number; protocol?: 'ws' | 'wss'; baudRate?: number }): Promise<boolean> {
+  public async connectEsp32(options?: import('./transports/Esp32WebSocketTransport').Esp32WebSocketOptions): Promise<boolean> {
     return await transportManager.connectEsp32(options);
   }
 

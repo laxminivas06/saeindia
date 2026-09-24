@@ -189,6 +189,14 @@ export const ControlModePanel: React.FC<ControlModePanelProps> = ({
             </button>
           </div>
 
+          {/* ArduPilot DISARM_DELAY Safety Notice */}
+          <div className="p-2.5 rounded-lg bg-sky-950/40 border border-sky-800/40 flex items-start space-x-2 text-[11px] text-sky-300">
+            <ShieldCheck className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
+            <div className="leading-snug">
+              <span className="font-bold">ArduPilot Ground Auto-Disarm:</span> ArduCopter firmware automatically disarms motors after <span className="font-bold underline">10 seconds</span> on the ground if throttle/takeoff is not initiated (<code className="bg-slate-900 px-1 py-0.5 rounded text-[10px]">DISARM_DELAY</code>). Press <span className="font-bold text-emerald-300">TAKEOFF</span> after arming.
+            </div>
+          </div>
+
           {/* B. DIRECTIONAL CONTROLS & FLIGHT ACTIONS */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* 1. D-PAD DIRECTIONAL CONTROLLER */}
