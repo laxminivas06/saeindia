@@ -1,4 +1,4 @@
-export type AppRole = 'GROUND_STATION' | 'DRONE' | 'RUNNER' | 'TESTBENCH' | 'SELECT';
+export type AppRole = 'GROUND_STATION' | 'DRONE' | 'RUNNER' | 'MANUAL' | 'TESTBENCH' | 'SELECT';
 
 export type MissionState =
   | 'IDLE'

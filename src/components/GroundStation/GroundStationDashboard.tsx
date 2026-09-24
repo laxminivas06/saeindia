@@ -10,22 +10,19 @@ import { HomePointSetter } from './HomePointSetter';
 import { PreArmChecksPanel } from '../common/PreArmChecksPanel';
 import { ControlModePanel } from '../common/ControlModePanel';
 import { TacticalMap } from './TacticalMap';
+import { LiveVideoFeed } from './LiveVideoFeed';
+import { ConnectionStatusDeck } from '../common/ConnectionStatusDeck';
 import { PixhawkConnectionCard } from '../Drone/PixhawkConnectionCard';
-import { 
-  Play, 
-  RotateCcw, 
-  ShieldAlert, 
-  Plane, 
-  Info, 
-  CheckCircle, 
-  Radio, 
-  ArrowRight, 
-  Zap, 
+import {
+  Play,
+  ShieldAlert,
   Power,
-  PowerOff,
-  ShieldCheck,
   Loader2,
-  AlertTriangle
+  AlertTriangle,
+  Sliders,
+  Cpu,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 
 interface GroundStationDashboardProps {
@@ -41,6 +38,7 @@ interface GroundStationDashboardProps {
   onSetHomePoint: () => void;
   onStartMission: () => void;
   onEmergencyRTL: () => void;
+  onSwitchToManual?: () => void;
 }
 
 export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
@@ -55,11 +53,13 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
   runnerLink,
   onSetHomePoint,
   onStartMission,
-  onEmergencyRTL
+  onEmergencyRTL,
+  onSwitchToManual
 }) => {
   const [isArming, setIsArming] = useState(false);
   const [isDisarming, setIsDisarming] = useState(false);
   const [armFeedback, setArmFeedback] = useState<string | null>(null);
+  const [showHardware, setShowHardware] = useState(false);
 
   const isMissionActive =
     missionState !== 'IDLE' &&
@@ -70,109 +70,89 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
   const isDroneAirborne = telemetry.isArmed && telemetry.altitude > 1.0;
   const isArmed = telemetry.isArmed;
 
-  // Authoritative state clearing: When FC telemetry confirms armed/disarmed state, clear transient states
   useEffect(() => {
-    if (isArmed) {
-      setIsArming(false);
-      setArmFeedback(null);
-    } else {
-      setIsDisarming(false);
-    }
+    if (isArmed) { setIsArming(false); setArmFeedback(null); }
+    else { setIsDisarming(false); }
   }, [isArmed]);
 
-  // Dedicated ARM Handler (MAV_CMD_COMPONENT_ARM_DISARM param1=1.0 param2=0.0)
   const handleDedicatedArmClick = async () => {
-    if (!pixhawkState.isConnected) {
-      setArmFeedback('Flight controller not connected. Connect first.');
-      return;
-    }
-
+    if (!pixhawkState.isConnected) { setArmFeedback('Flight controller not connected. Connect first.'); return; }
     setArmFeedback(null);
     setIsArming(true);
-
     const sent = await mavlinkService.sendArmCommand();
-    if (!sent) {
-      setIsArming(false);
-      setArmFeedback('ARM TRANSMISSION FAILED: Check WebSocket / ESP32 TX Link.');
-      return;
-    }
-
-    // Awaiting COMMAND_ACK and HEARTBEAT confirmation
+    if (!sent) { setIsArming(false); setArmFeedback('ARM TRANSMISSION FAILED: Check WebSocket / ESP32 TX Link.'); return; }
     const startWait = Date.now();
     const watchdog = setInterval(() => {
       if (mavlinkService.getTelemetry().isArmed) {
-        setIsArming(false);
-        setArmFeedback(null);
-        clearInterval(watchdog);
+        setIsArming(false); setArmFeedback(null); clearInterval(watchdog);
       } else {
-        const currentPixState = mavlinkService.getConnectionState();
-        const lastAck = currentPixState.lastArmCommandAck || currentPixState.lastCommandAck;
+        const s = mavlinkService.getConnectionState();
+        const lastAck = s.lastArmCommandAck || s.lastCommandAck;
         if (lastAck && lastAck.command === 400 && lastAck.result !== 0) {
-          setIsArming(false);
-          clearInterval(watchdog);
-          const preArmReason = currentPixState.preArmFailReason || 
-            (currentPixState.statusHistory && currentPixState.statusHistory.length > 0 ? currentPixState.statusHistory[0].text : undefined);
-          let failMsg = `ARM REJECTED by Pixhawk (${lastAck.resultName || 'FAILED'})`;
-          if (preArmReason) failMsg += ` — ${preArmReason}`;
-          setArmFeedback(failMsg);
-          return;
+          setIsArming(false); clearInterval(watchdog);
+          const reason = s.preArmFailReason || (s.statusHistory?.length ? s.statusHistory[0].text : undefined);
+          let msg = `ARM REJECTED by Pixhawk (${lastAck.resultName || 'FAILED'})`;
+          if (reason) msg += ` — ${reason}`;
+          setArmFeedback(msg); return;
         }
         if (Date.now() - startWait > 4500) {
-          setIsArming(false);
-          clearInterval(watchdog);
-          const preArmReason = currentPixState.preArmFailReason;
-          if (preArmReason) {
-            setArmFeedback(`ARM REJECTED: ${preArmReason}`);
-          } else {
-            setArmFeedback('ARM ACK TIMEOUT (Waiting for vehicle armed confirmation)');
-          }
+          setIsArming(false); clearInterval(watchdog);
+          setArmFeedback(s.preArmFailReason ? `ARM REJECTED: ${s.preArmFailReason}` : 'ARM ACK TIMEOUT');
         }
       }
     }, 200);
   };
 
-  // Dedicated DISARM Handler (MAV_CMD_COMPONENT_ARM_DISARM param1=0.0 param2=0.0)
   const handleDedicatedDisarmClick = async () => {
-    if (!pixhawkState.isConnected) {
-      setArmFeedback('Flight controller not connected. Connect first.');
-      return;
-    }
-
+    if (!pixhawkState.isConnected) { setArmFeedback('Flight controller not connected. Connect first.'); return; }
     setArmFeedback(null);
     setIsDisarming(true);
-
     const sent = await mavlinkService.sendDisarmCommand();
-    if (!sent) {
-      setIsDisarming(false);
-      setArmFeedback('Disarm command transmission failed: Check connection.');
-      return;
-    }
-
+    if (!sent) { setIsDisarming(false); setArmFeedback('Disarm command transmission failed.'); return; }
     const startWait = Date.now();
     const watchdog = setInterval(() => {
-      if (!mavlinkService.getTelemetry().isArmed) {
-        setIsDisarming(false);
-        setArmFeedback(null);
-        clearInterval(watchdog);
-      } else if (Date.now() - startWait > 4500) {
-        setIsDisarming(false);
-        clearInterval(watchdog);
-      }
+      if (!mavlinkService.getTelemetry().isArmed) { setIsDisarming(false); setArmFeedback(null); clearInterval(watchdog); }
+      else if (Date.now() - startWait > 4500) { setIsDisarming(false); clearInterval(watchdog); }
     }, 250);
   };
 
   return (
-    <div className="p-3 sm:p-5 max-w-7xl mx-auto space-y-4 sm:space-y-5 font-mono">
-      {/* Top Pixhawk USB-OTG & ESP32-S3 Connection Card */}
+    <div className="p-3 sm:p-5 max-w-7xl mx-auto space-y-4 sm:space-y-5 font-mono select-none">
+
+      {/* ============================================================ */}
+      {/* 1. CONNECTION STATUS DECK (7 independent states)             */}
+      {/* ============================================================ */}
+      <ConnectionStatusDeck
+        pixhawkState={pixhawkState}
+        runnerLink={runnerLink}
+        telemetry={telemetry}
+      />
+
+      {/* ============================================================ */}
+      {/* 2. ESP32 / PIXHAWK CONNECTION CARD (always visible)          */}
+      {/* ============================================================ */}
       <PixhawkConnectionCard connectionState={pixhawkState} />
 
-      {/* Top Banner: Drone Status Indicator & Mission State */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900/90 p-3 sm:p-4 rounded-xl border border-slate-800 hud-border">
+      {/* ============================================================ */}
+      {/* 3. LIVE VIDEO + MAP (2-column desktop, stacked mobile)       */}
+      {/* ============================================================ */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <LiveVideoFeed className="h-[260px] sm:h-[340px] lg:h-[400px]" />
+        <TacticalMap
+          telemetry={telemetry}
+          homePoint={homePoint}
+          className="h-[260px] sm:h-[340px] lg:h-[400px]"
+        />
+      </div>
+
+      {/* ============================================================ */}
+      {/* 4. STATUS STRIP + MANUAL OVERRIDE ACCESS                     */}
+      {/* ============================================================ */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900/90 p-3 sm:p-4 rounded-xl border border-slate-800">
         <div className="space-y-1">
           <div className="text-[11px] text-slate-400 font-bold uppercase tracking-wider flex items-center space-x-1.5">
             <span>GROUND STATION ANDROID CONTROLLER</span>
             <span className="text-slate-500">•</span>
-            {/* DRONE STARTED / AIRBORNE INDICATOR */}
             <span className={`px-2 py-0.5 rounded text-[10px] font-black border flex items-center space-x-1 ${
               isDroneAirborne
                 ? 'bg-emerald-950/80 border-emerald-400 text-emerald-300 animate-pulse'
@@ -181,40 +161,40 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
                 : 'bg-slate-800 border-slate-700 text-slate-400'
             }`}>
               <Power className="w-3 h-3" />
-              <span>
-                {isDroneAirborne
-                  ? 'DRONE STARTED: AIRBORNE (AUTO)'
-                  : telemetry.isArmed
-                  ? 'DRONE ARMED: READY ON GROUND'
-                  : 'DRONE ON GROUND: DISARMED'}
-              </span>
+              <span>{isDroneAirborne ? 'AIRBORNE (AUTO)' : telemetry.isArmed ? 'ARMED ON GROUND' : 'DISARMED'}</span>
             </span>
           </div>
           <StatusBadge state={missionState} size="lg" />
         </div>
-
-        {/* GCS Rule banner */}
-        <div className="bg-slate-950/80 px-3 py-2 rounded-lg border border-slate-800 text-[11px] text-slate-400 flex items-center space-x-2">
-          <Info className="w-4 h-4 text-sky-400 shrink-0" />
-          <span>
-            <strong>GCS Focus:</strong> Pre-flight setup, Start Mission, &amp; Telemetry monitoring. QR data sends directly to Runner.
-          </span>
-        </div>
+        {onSwitchToManual && (
+          <button
+            onClick={onSwitchToManual}
+            className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-rose-950/80 text-rose-300 border border-slate-700 hover:border-rose-500/50 text-xs font-bold uppercase flex items-center space-x-2 transition self-start sm:self-auto cursor-pointer"
+          >
+            <Sliders className="w-4 h-4 text-rose-400" />
+            <span>MANUAL OVERRIDE</span>
+          </button>
+        )}
       </div>
 
-      {/* Main Grid: Responsive 2-column layout */}
+      {/* ============================================================ */}
+      {/* 5. TELEMETRY HUD                                              */}
+      {/* ============================================================ */}
+      <TelemetryHUD telemetry={telemetry} />
+
+      {/* ============================================================ */}
+      {/* 6. CONTROLS: MISSION + PREFLIGHT + FLIGHT CONTROLS           */}
+      {/* ============================================================ */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-        {/* Left Column: Timer & Controls & Preflight (lg: 5 cols) */}
-        <div className="lg:col-span-5 space-y-4">
-          {/* Master 3-Minute Timer (Persists on Reload) */}
+        {/* Left: Mission Controls */}
+        <div className="lg:col-span-6 space-y-4">
           <MissionTimer
             remainingSeconds={remainingSeconds}
             elapsedSeconds={elapsedSeconds}
             missionState={missionState}
           />
 
-          {/* Primary Action Button Grid: START MISSION + EMERGENCY RTL */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 font-mono">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <button
               onClick={onStartMission}
               disabled={!isReadyForMission || isMissionActive}
@@ -237,15 +217,16 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
             </button>
           </div>
 
-          {/* Home Point Setter Card */}
           <HomePointSetter
             homePoint={homePoint}
             gps={telemetry.gps}
             onSetHomePoint={onSetHomePoint}
             disabled={isMissionActive}
           />
+        </div>
 
-          {/* Mode-Aware Responsive Pre-Arm Checks & Validation Panel */}
+        {/* Right: Pre-flight + Arm Controls */}
+        <div className="lg:col-span-6 space-y-4">
           <PreArmChecksPanel
             connectionState={pixhawkState}
             telemetry={telemetry}
@@ -253,9 +234,6 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
             isReady={isReadyForMission}
           />
 
-          {/* ========================================================================= */}
-          {/* FLIGHT CONTROL INTERFACE: RC / NO-RC TOGGLE & TOUCH-SAFE CONTROLS         */}
-          {/* ========================================================================= */}
           <ControlModePanel
             telemetry={telemetry}
             connectionState={pixhawkState}
@@ -265,49 +243,12 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
             isDisarmingInProgress={isDisarming}
           />
 
-          {/* Error Feedback if Arm Fails */}
           {armFeedback && !isArmed && (
-            <div className="p-2.5 bg-rose-950/70 border border-rose-500/50 rounded-xl text-rose-300 text-xs flex items-center space-x-2">
+            <div className="p-3 bg-rose-950/70 border border-rose-500/50 rounded-xl text-rose-300 text-xs flex items-center space-x-2">
               <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
               <span>{armFeedback}</span>
             </div>
           )}
-        </div>
-
-        {/* Right Column: Telemetry HUD & Tactical Map (lg: 7 cols) */}
-        <div className="lg:col-span-7 space-y-4">
-          {/* Primary Telemetry Deck */}
-          <TelemetryHUD telemetry={telemetry} />
-
-          {/* Live Tactical Map */}
-          <TacticalMap
-            telemetry={telemetry}
-            homePoint={homePoint}
-            className="h-[360px] sm:h-[420px]"
-          />
-
-          {/* Telemetry Detail Strip */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
-            <div className="bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
-              <div className="text-[10px] text-slate-400 uppercase">Drone Engine</div>
-              <div className={`font-bold mt-0.5 ${isDroneAirborne ? 'text-emerald-400' : 'text-slate-300'}`}>
-                {isDroneAirborne ? 'RUNNING (AUTO)' : 'STANDBY'}
-              </div>
-              <div className="text-[10px] text-slate-500">Altitude: {telemetry.altitude.toFixed(1)}m</div>
-            </div>
-
-            <div className="bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
-              <div className="text-[10px] text-slate-400 uppercase">Pixhawk MAVLink</div>
-              <div className="font-bold text-slate-200 mt-0.5">{pixhawkState.connectionType}</div>
-              <div className="text-[10px] text-emerald-400">Loss: {pixhawkState.packetLossPercent}%</div>
-            </div>
-
-            <div className="bg-slate-900/80 p-2.5 rounded-lg border border-slate-800 col-span-2 sm:col-span-1">
-              <div className="text-[10px] text-slate-400 uppercase">Search Grid</div>
-              <div className="font-bold text-amber-400 mt-0.5">ZONE A (100x80m)</div>
-              <div className="text-[10px] text-slate-400">Timer: 3-Min Persisted ✓</div>
-            </div>
-          </div>
         </div>
       </div>
     </div>

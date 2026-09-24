@@ -32,6 +32,14 @@ export const ROLE_CREDENTIALS = {
     passkey: 'runner2026',
     stationId: 'STA_RUNNER_DIRECT',
     badge: 'GROUND RUNNER'
+  },
+  MANUAL: {
+    role: 'MANUAL' as AppRole,
+    title: 'Manual Control Operator',
+    defaultCallsign: 'MANUAL_OPS_01',
+    passkey: 'manual2026',
+    stationId: 'STA_MANUAL_OPS',
+    badge: 'MANUAL OVERRIDE'
   }
 };
 
@@ -110,6 +118,19 @@ class AuthService {
     if (config) {
       this.login(role, config.defaultCallsign, config.passkey);
     }
+  }
+
+  public switchRole(role: AppRole) {
+    // Instant role switch without passkey - for in-app mode switching
+    const config = ROLE_CREDENTIALS[role as keyof typeof ROLE_CREDENTIALS];
+    const session: UserSession = {
+      role,
+      callsign: config ? config.defaultCallsign : role,
+      stationId: config ? config.stationId : `STA_${role}`,
+      token: `TKN_${role}_${Date.now()}`,
+      loginTime: Date.now()
+    };
+    this.saveSession(session);
   }
 
   public logout() {
