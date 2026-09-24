@@ -92,9 +92,11 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
   // Local ESP32 IP & Port settings (LOCAL HTTP Mode)
   const [esp32Host, setEsp32Host] = useState<string>(() => {
     if (typeof window !== 'undefined') {
-      return localStorage.getItem('esp32_host') || '192.168.4.1';
+      const saved = localStorage.getItem('esp32_host');
+      if (saved && saved !== '192.168.4.1') return saved;
+      return '192.168.31.194';
     }
-    return '192.168.4.1';
+    return '192.168.31.194';
   });
   const [esp32Port, setEsp32Port] = useState<number>(() => {
     if (typeof window !== 'undefined') {
@@ -548,7 +550,7 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                     type="text"
                     value={esp32Host}
                     onChange={(e) => setEsp32Host(e.target.value)}
-                    placeholder="192.168.4.1"
+                    placeholder="192.168.31.194"
                     className="bg-transparent text-slate-100 font-mono text-xs w-full focus:outline-none"
                   />
                 </div>

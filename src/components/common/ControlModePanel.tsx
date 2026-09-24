@@ -189,6 +189,57 @@ export const ControlModePanel: React.FC<ControlModePanelProps> = ({
             </button>
           </div>
 
+          {/* Real-time Pre-Arm Rejection / Safety Switch Status Banner */}
+          {connectionState.preArmFailReason && !isArmed && (
+            <div className="p-3 rounded-xl bg-rose-950/80 border border-rose-500/70 text-rose-200 text-xs space-y-1.5 shadow-lg">
+              <div className="flex items-start space-x-2">
+                <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                <div>
+                  <strong className="text-rose-300 uppercase">Pixhawk Pre-Arm Check Rejection:</strong>
+                  <div className="font-mono text-white text-[11px] mt-0.5 bg-black/50 p-2 rounded border border-rose-500/40 select-all">
+                    {connectionState.preArmFailReason}
+                  </div>
+                </div>
+              </div>
+              <div className="text-[10px] text-rose-300/90 space-y-0.5 pt-1 border-t border-rose-500/30">
+                {connectionState.preArmFailReason.toLowerCase().includes('switch') && (
+                  <div>• <strong>Physical Safety Switch:</strong> Press &amp; hold the Pixhawk safety button for 3 seconds until the LED turns solid red.</div>
+                )}
+                {connectionState.preArmFailReason.toLowerCase().includes('compass') && (
+                  <div>• <strong>Compass / Mag:</strong> Keep away from indoor metal objects or perform compass calibration in Mission Planner.</div>
+                )}
+                {connectionState.preArmFailReason.toLowerCase().includes('fix') || connectionState.preArmFailReason.toLowerCase().includes('gps') ? (
+                  <div>• <strong>GPS Fix:</strong> Mode requires 3D GPS fix. For indoor/bench testing, switch mode to <strong className="text-emerald-300 underline">STABILIZE</strong> or <strong className="text-emerald-300 underline">ALT_HOLD</strong> below.</div>
+                ) : null}
+              </div>
+            </div>
+          )}
+
+          {/* Flight Mode Quick Selector */}
+          <div className="p-2.5 bg-slate-950 rounded-xl border border-slate-800 space-y-1.5">
+            <div className="flex items-center justify-between text-[10px] uppercase font-bold text-slate-400">
+              <span>Flight Mode: <span className="text-emerald-300 font-mono text-xs">{telemetry.flightMode || 'STABILIZE'}</span></span>
+              <span>Select Mode to Arm:</span>
+            </div>
+            <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5 text-xs font-bold">
+              {(['STABILIZE', 'ALT_HOLD', 'LOITER', 'AUTO', 'GUIDED', 'RTL'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => mavlinkService.setFlightMode(mode)}
+                  disabled={!connectionState.isConnected}
+                  className={`py-1.5 px-1 rounded-lg text-[10px] transition cursor-pointer font-bold ${
+                    (telemetry.flightMode || '').toUpperCase() === mode
+                      ? 'bg-emerald-600 text-white shadow'
+                      : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700'
+                  }`}
+                >
+                  {mode}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* ArduPilot DISARM_DELAY Safety Notice */}
           <div className="p-2.5 rounded-lg bg-sky-950/40 border border-sky-800/40 flex items-start space-x-2 text-[11px] text-sky-300">
             <ShieldCheck className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />

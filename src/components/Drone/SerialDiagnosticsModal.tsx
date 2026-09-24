@@ -261,6 +261,100 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
                 </div>
               </div>
 
+              {/* End-to-End ARM Transmission Path Diagnostics Matrix */}
+              <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-2.5">
+                <div className="flex items-center justify-between pb-1.5 border-b border-slate-800 text-[11px]">
+                  <span className="font-black text-amber-400 uppercase flex items-center space-x-1.5">
+                    <Activity className="w-3.5 h-3.5" />
+                    <span>ARM COMMAND TRANSMISSION PATH &amp; ACK DIAGNOSIS</span>
+                  </span>
+                  <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase ${
+                    connectionState.vehicleState === 'ARMED'
+                      ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/50'
+                      : 'bg-slate-900 text-slate-400 border border-slate-700'
+                  }`}>
+                    VEHICLE: {connectionState.vehicleState || 'DISARMED'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2 text-[11px]">
+                  {/* 1. ARM Button */}
+                  <div className="p-2 bg-slate-900/90 rounded-lg border border-slate-800">
+                    <div className="text-[9px] text-slate-500 uppercase font-bold">ARM Button</div>
+                    <div className={`font-bold mt-0.5 ${connectionState.lastArmButtonClickTime ? 'text-emerald-400' : 'text-slate-400'}`}>
+                      {connectionState.lastArmButtonClickTime ? 'CLICKED' : 'IDLE'}
+                    </div>
+                  </div>
+
+                  {/* 2. MAVLink Packet */}
+                  <div className="p-2 bg-slate-900/90 rounded-lg border border-slate-800">
+                    <div className="text-[9px] text-slate-500 uppercase font-bold">MAVLink Packet</div>
+                    <div className={`font-bold mt-0.5 ${connectionState.lastArmPacketState === 'CREATED' ? 'text-emerald-400' : connectionState.lastArmPacketState === 'FAILED' ? 'text-rose-400' : 'text-slate-400'}`}>
+                      {connectionState.lastArmPacketState === 'CREATED' ? `CREATED (${connectionState.lastArmPacketLength || 41}B)` : connectionState.lastArmPacketState === 'FAILED' ? 'FAILED' : 'NONE'}
+                    </div>
+                  </div>
+
+                  {/* 3. WebSocket Link */}
+                  <div className="p-2 bg-slate-900/90 rounded-lg border border-slate-800">
+                    <div className="text-[9px] text-slate-500 uppercase font-bold">WebSocket Link</div>
+                    <div className={`font-bold mt-0.5 ${isUsbConnected ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {isUsbConnected ? 'OPEN' : 'CLOSED'}
+                    </div>
+                  </div>
+
+                  {/* 4. Browser TX */}
+                  <div className="p-2 bg-slate-900/90 rounded-lg border border-slate-800">
+                    <div className="text-[9px] text-slate-500 uppercase font-bold">Browser TX</div>
+                    <div className="font-bold text-sky-400 mt-0.5">
+                      {connectionState.bytesSent} B
+                    </div>
+                  </div>
+
+                  {/* 5. ESP32 WS RX */}
+                  <div className="p-2 bg-slate-900/90 rounded-lg border border-slate-800">
+                    <div className="text-[9px] text-slate-500 uppercase font-bold">ESP32 WS RX</div>
+                    <div className="font-bold text-purple-400 mt-0.5">
+                      {connectionState.bytesReceived} B
+                    </div>
+                  </div>
+
+                  {/* 6. Last ACK Status */}
+                  <div className="p-2 bg-slate-900/90 rounded-lg border border-slate-800">
+                    <div className="text-[9px] text-slate-500 uppercase font-bold">Last ACK (Cmd 400)</div>
+                    <div className={`font-bold mt-0.5 truncate ${
+                      connectionState.lastArmCommandAck
+                        ? connectionState.lastArmCommandAck.result === 0 ? 'text-emerald-400' : 'text-rose-400'
+                        : 'text-slate-400'
+                    }`}>
+                      {connectionState.lastArmCommandAck ? `${connectionState.lastArmCommandAck.resultName}` : 'NONE'}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Packet Hex Dump & PreArm details if available */}
+                {connectionState.lastArmPacketHex && (
+                  <div className="p-2 bg-black/60 rounded-lg border border-slate-800 font-mono text-[10px] space-y-1">
+                    <div className="text-slate-400 flex items-center justify-between">
+                      <span><strong>MAVLink COMMAND_LONG Binary Hex:</strong></span>
+                      <span className="text-emerald-400">cmd=400, p1=1.0, p2=0.0, sys=1, comp=1</span>
+                    </div>
+                    <div className="text-emerald-300 break-all select-all">
+                      {connectionState.lastArmPacketHex}
+                    </div>
+                  </div>
+                )}
+
+                {connectionState.preArmFailReason && (
+                  <div className="p-2 bg-rose-950/60 border border-rose-500/50 rounded-lg text-[11px] text-rose-200 flex items-start space-x-1.5">
+                    <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                    <div>
+                      <strong className="text-rose-300">Pixhawk Pre-Arm Status:</strong>{' '}
+                      <span>{connectionState.preArmFailReason}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Console Log Messages */}
               <div className="space-y-1.5">
                 <div className="text-xs font-bold text-slate-300 uppercase flex items-center justify-between">

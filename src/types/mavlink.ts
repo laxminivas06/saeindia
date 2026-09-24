@@ -163,6 +163,16 @@ export interface PixhawkConnectionState {
   errorMessage?: string;
   wifiSsid?: string;
   wifiState?: 'CONNECTED' | 'DISCONNECTED' | 'CONFIGURING';
+  lastArmButtonClickTime?: number;
+  lastArmPacketState?: 'CREATED' | 'FAILED' | 'NONE';
+  lastArmPacketLength?: number;
+  lastArmPacketHex?: string;
+  lastArmParam1?: number;
+  lastArmParam2?: number;
+  lastArmWsSendState?: 'START' | 'COMPLETE' | 'FAILED';
+  lastArmAckResult?: string;
+  esp32WsRxBytes?: number;
+  esp32PixhawkTxBytes?: number;
   diagnostics: UsbDeviceDiagnostics;
 }
 

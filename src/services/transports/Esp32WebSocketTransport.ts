@@ -24,7 +24,7 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
   
   // Connection Mode: 'LOCAL' (ws://) vs 'SECURE' (wss://)
   private connectionMode: WebSocketConnectionMode = 'LOCAL';
-  private localHost: string = '192.168.4.1';
+  private localHost: string = '192.168.31.194';
   private localPort: number = 8080;
   private secureEndpoint: string = 'relay.example.com:8443';
   private currentProtocol: 'ws' | 'wss' = 'ws';
@@ -63,7 +63,11 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
           this.connectionMode = savedMode;
         }
 
-        if (savedHost) this.localHost = savedHost;
+        if (savedHost && savedHost !== '192.168.4.1') {
+          this.localHost = savedHost;
+        } else {
+          this.localHost = '192.168.31.194';
+        }
         if (savedPort) this.localPort = parseInt(savedPort, 10) || 8080;
         if (savedSecureEndpoint) this.secureEndpoint = savedSecureEndpoint;
         if (savedProto === 'ws' || savedProto === 'wss') this.currentProtocol = savedProto;
@@ -392,6 +396,7 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
           if (event.data instanceof ArrayBuffer) {
             const chunk = new Uint8Array(event.data);
             this.cumulativeRxBytes += chunk.length;
+            console.log(`[ESP32 WS RX] length = ${chunk.length}`);
             this.dataListeners.forEach((fn) => fn(chunk));
           } else if (event.data instanceof Blob) {
             const reader = new FileReader();
@@ -399,6 +404,7 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
               if (reader.result instanceof ArrayBuffer) {
                 const chunk = new Uint8Array(reader.result);
                 this.cumulativeRxBytes += chunk.length;
+                console.log(`[ESP32 WS RX] length = ${chunk.length}`);
                 this.dataListeners.forEach((fn) => fn(chunk));
               }
             };
@@ -407,6 +413,7 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
             const encoder = new TextEncoder();
             const chunk = encoder.encode(event.data);
             this.cumulativeRxBytes += chunk.length;
+            console.log(`[ESP32 WS RX] length = ${chunk.length}`);
             this.dataListeners.forEach((fn) => fn(chunk));
           }
         };
@@ -569,6 +576,7 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
       const payload = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
       this.socket.send(payload);
       this.cumulativeTxBytes += data.length;
+      console.log(`[ESP32 PIXHAWK TX] forwarding = ${data.length}`);
       return true;
     } catch (e) {
       console.error('[WS TX] Failed to send MAVLink bytes over WebSocket:', e);

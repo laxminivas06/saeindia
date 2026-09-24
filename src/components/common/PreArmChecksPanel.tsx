@@ -402,7 +402,7 @@ export const PreArmChecksPanel: React.FC<PreArmChecksPanelProps> = ({
                 <div>
                   <div className="text-slate-400 uppercase font-bold">WebSocket Link</div>
                   <div className="text-slate-300 font-mono mt-0.5">
-                    {connectionState.portOrAddress || 'ws://192.168.4.1:8080'}
+                    {connectionState.portOrAddress || 'ws://192.168.31.194:8080'}
                   </div>
                 </div>
                 <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase ${connectionState.isUsbConnected || connectionState.isConnected ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/40' : 'bg-rose-950 text-rose-400 border border-rose-500/40'}`}>
@@ -475,6 +475,12 @@ export const PreArmChecksPanel: React.FC<PreArmChecksPanelProps> = ({
                 <div><strong>Param1:</strong> 1.0 (ARM)</div>
                 <div><strong>Param2:</strong> 0.0 (Standard)</div>
               </div>
+              {connectionState.lastArmPacketHex && (
+                <div className="mt-1 pt-1 border-t border-slate-800/80 font-mono text-[9px] text-emerald-300 break-all select-all">
+                  <span className="text-slate-500 font-bold uppercase mr-1">HEX:</span>
+                  {connectionState.lastArmPacketHex}
+                </div>
+              )}
             </div>
 
             {/* RX ARM COMMAND_ACK */}

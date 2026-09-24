@@ -166,6 +166,7 @@ class MAVLinkService {
   private rxBuffer: Uint8Array = new Uint8Array(4096);
   private rxBufferLen: number = 0;
   private sendSeq: number = 0;
+  private isArmCommandInFlight: boolean = false;
 
   // Heartbeat Rate Monitoring & Timeout Tracking
   private heartbeatTimestamps: number[] = [];
@@ -223,7 +224,7 @@ class MAVLinkService {
 
   constructor() {
     this.logDiagnostic('SYSTEM', 'MAVLink Engine Initialized. Ready for Pixhawk USB OTG auto-detection.', 'info');
-    
+
     // Subscribe to USB byte stream from unified cross-platform USB Host
     usbHostService.subscribeData((chunk: Uint8Array) => {
       this.connectionState.bytesReceived += chunk.length;
@@ -442,7 +443,7 @@ class MAVLinkService {
 
   public getConnectionState(): PixhawkConnectionState {
     const isReceiving = this.connectionState.isConnected && (Date.now() - this.connectionState.lastHeartbeat < 4000);
-    return { 
+    return {
       ...this.connectionState,
       isReceivingTelemetry: isReceiving,
       diagnostics: { ...this.connectionState.diagnostics },
@@ -596,7 +597,7 @@ class MAVLinkService {
       };
     } else {
       const mode = options?.mode || 'LOCAL';
-      const host = (options?.host || '192.168.4.1').trim();
+      const host = (options?.host && options.host !== '192.168.4.1' ? options.host : '192.168.31.194').trim();
       const p = options?.port || 8080;
       const secureEp = (options?.secureEndpoint || 'relay.example.com:8443').trim();
       const proto = options?.protocol || (mode === 'SECURE' ? 'wss' : 'ws');
@@ -681,7 +682,7 @@ class MAVLinkService {
       clearInterval(this.simInterval);
       this.simInterval = null;
     }
-    
+
     // Clear MAVLink parser ring buffer
     this.rxBufferLen = 0;
     this.heartbeatTimestamps = [];
@@ -1043,6 +1044,10 @@ class MAVLinkService {
             text += String.fromCharCode(textBytes[j]);
           }
           if (text.length > 0) {
+            const lower = text.toLowerCase();
+            if (lower.includes('prearm') || lower.includes('arm fail') || lower.includes('check') || lower.includes('disabled') || lower.includes('compass') || lower.includes('gps')) {
+              this.connectionState.preArmFailReason = text;
+            }
             this.logDiagnostic('MAVLINK', `[STATUSTEXT] [${severity}] ${text}`, severityLevel <= 3 ? 'error' : severityLevel === 4 ? 'warn' : 'info');
             this.addStatusMessage(severity, severityLevel, text);
           }
@@ -1076,11 +1081,28 @@ class MAVLinkService {
           const result = view.getUint8(2);
           const progress = payload.length >= 4 ? view.getUint8(3) : 0;
           const resultParam2 = payload.length >= 8 ? view.getInt32(4, true) : 0;
-          const resultNames = ['ACCEPTED', 'TEMP_REJECTED', 'DENIED', 'UNSUPPORTED', 'FAILED', 'IN_PROGRESS', 'CANCELLED'];
-          const resultName = resultNames[result] || `CODE_${result}`;
+          const resultNames = [
+            'MAV_RESULT_ACCEPTED', // 0
+            'MAV_RESULT_TEMPORARILY_REJECTED', // 1
+            'MAV_RESULT_DENIED', // 2
+            'MAV_RESULT_UNSUPPORTED', // 3
+            'MAV_RESULT_FAILED', // 4
+            'MAV_RESULT_IN_PROGRESS', // 5
+            'MAV_RESULT_CANCELLED' // 6
+          ];
+          const resultName = resultNames[result] || `MAV_RESULT_${result}`;
           const resText = `Command ${command} ACK: ${resultName}${resultParam2 ? ` (param2=${resultParam2})` : ''}`;
-          
-          console.log(`[MAVLINK ACK]\ncommand = ${command}\nresult = ${resultName} (${result})`);
+
+          if (command === 400) {
+            console.log(`[MAVLINK ACK]\ncommand = ${command}\nresult = ${resultName} (${result})`);
+            if (result === 0) {
+              console.log('[ARM] PIXHAWK ACCEPTED COMMAND');
+            } else {
+              console.warn(`[ARM] PIXHAWK REJECTED COMMAND: ${resultName} (Code ${result})`);
+            }
+          } else {
+            console.log(`[MAVLINK ACK]\ncommand = ${command}\nresult = ${resultName} (${result})`);
+          }
 
           const ackObj = {
             command,
@@ -1097,6 +1119,7 @@ class MAVLinkService {
 
           if (command === 400) {
             this.connectionState.lastArmCommandAck = ackObj;
+            this.connectionState.lastArmAckResult = resultName;
             if (result === 0) {
               this.logDiagnostic('MAVLINK', '[ARM ACK] ARM COMMAND ACCEPTED ✓ (Awaiting Heartbeat armed confirmation)', 'success');
               this.addStatusMessage('INFO', 6, 'ARM COMMAND ACCEPTED (Waiting for vehicle armed state)');
@@ -1143,12 +1166,18 @@ class MAVLinkService {
   public async sendArmCommand(): Promise<boolean> {
     console.log('[ARM] BUTTON CLICKED');
 
+    // Debounce / In-flight guard: 1 click = exactly 1 command sent
+    if (this.isArmCommandInFlight) {
+      console.warn('[ARM] ARM command already in flight. Ignoring duplicate request.');
+      return false;
+    }
+
     const isWsOpen = this.connectionState.isUsbConnected || this.connectionState.isConnected;
     console.log(`[ARM] WS STATE = ${isWsOpen ? 'OPEN' : 'CLOSED'}`);
 
     if (!isWsOpen && !this.simInterval) {
-      console.error('[ARM] Cannot send ARM: WebSocket disconnected');
-      this.logDiagnostic('ERROR', 'Cannot send ARM: WebSocket disconnected', 'error');
+      console.error('[ARM] FAILED BEFORE PACKET CREATION: WebSocket disconnected');
+      this.logDiagnostic('ERROR', '[ARM] Cannot send ARM: WebSocket disconnected', 'error');
       this.addStatusMessage('WARNING', 4, 'WebSocket disconnected');
       return false;
     }
@@ -1156,22 +1185,34 @@ class MAVLinkService {
     // Dynamic target_system and target_component with ArduPilot fallback
     const targetSys = this.connectionState.systemId || 1;
     const targetComp = this.connectionState.componentId || 1;
+    const sourceSys = 255;
+    const sourceComp = 190;
 
     console.log(`[ARM] SYSID = ${targetSys}`);
     console.log(`[ARM] COMPONENT = ${targetComp}`);
     console.log('[ARM] COMMAND = 400');
     console.log('[ARM] PARAM1 = 1');
     console.log('[ARM] PARAM2 = 0');
+    console.log(`[ARM] SOURCE SYSID = ${sourceSys}`);
+    console.log(`[ARM] SOURCE COMP = ${sourceComp}`);
+    console.log(`[ARM] TARGET SYSID = ${targetSys}`);
+    console.log(`[ARM] TARGET COMP = ${targetComp}`);
+    console.log('[ARM] COMMAND SEND COUNT = 1');
 
     // Runtime assertion: command MUST be 400, param1 MUST be 1.0, param2 MUST be 0.0
     const cmd = 400;
     const p1 = 1.0;
     const p2 = 0.0;
     if (cmd !== 400 || p1 !== 1.0 || p2 !== 0.0) {
-      console.error('[ARM] Runtime assertion failed: Invalid ARM command parameters. Command not sent.');
+      console.error('[ARM] FAILED BEFORE PACKET CREATION: Runtime assertion failed. Invalid ARM command parameters.');
       return false;
     }
 
+    this.isArmCommandInFlight = true;
+    this.connectionState.lastArmButtonClickTime = Date.now();
+    this.connectionState.lastArmParam1 = 1.0;
+    this.connectionState.lastArmParam2 = 0.0;
+    this.connectionState.lastArmWsSendState = 'START';
     this.connectionState.vehicleState = 'ARMING';
     this.telemetry.vehicleState = 'ARMING';
     this.connectionState.lastCommandName = 'ARM';
@@ -1181,18 +1222,27 @@ class MAVLinkService {
 
     this.addStatusMessage('NOTICE', 5, 'Sending MAVLink ARM Command (MAV_CMD_COMPONENT_ARM_DISARM param1=1)...');
     this.logDiagnostic('MAVLINK', `[ARM TX] Transmitting MAV_CMD_COMPONENT_ARM_DISARM (400) to SysID ${targetSys} CompID ${targetComp}`, 'info');
-    
-    if (this.connectionState.isRealHardware) {
-      const success = await this.sendMavlinkCommandLong(400 /* MAV_CMD_COMPONENT_ARM_DISARM */, 1.0 /* Arm */, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
-      return success;
-    } else {
-      this.telemetry.isArmed = true;
-      this.telemetry.vehicleState = 'ARMED';
-      this.connectionState.vehicleState = 'ARMED';
-      this.addStatusMessage('INFO', 6, 'SIMULATOR: Drone Armed (Motors Spinning)');
-      this.notifyTelemetry();
-      this.notifyConnection();
-      return true;
+
+    try {
+      if (this.connectionState.isRealHardware) {
+        const success = await this.sendMavlinkCommandLong(400 /* MAV_CMD_COMPONENT_ARM_DISARM */, 1.0 /* Arm */, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        return success;
+      } else {
+        this.telemetry.isArmed = true;
+        this.telemetry.vehicleState = 'ARMED';
+        this.connectionState.vehicleState = 'ARMED';
+        this.connectionState.lastArmPacketState = 'CREATED';
+        this.connectionState.lastArmWsSendState = 'COMPLETE';
+        this.addStatusMessage('INFO', 6, 'SIMULATOR: Drone Armed (Motors Spinning)');
+        this.notifyTelemetry();
+        this.notifyConnection();
+        return true;
+      }
+    } finally {
+      // Release in-flight lock after brief debounce period
+      setTimeout(() => {
+        this.isArmCommandInFlight = false;
+      }, 500);
     }
   }
 
@@ -1261,20 +1311,23 @@ class MAVLinkService {
     return this.sendDisarmCommand();
   }
 
-  public async setFlightMode(modeName: 'GUIDED' | 'AUTO' | 'STABILIZE' | 'LOITER' | 'RTL' | 'LAND'): Promise<boolean> {
+  public async setFlightMode(modeName: 'GUIDED' | 'AUTO' | 'STABILIZE' | 'ALT_HOLD' | 'POSHOLD' | 'LOITER' | 'RTL' | 'LAND'): Promise<boolean> {
     if (!this.connectionState.isConnected && !this.simInterval) {
       this.logDiagnostic('ERROR', `Cannot set mode ${modeName}: MAVLink not connected`, 'error');
       return false;
     }
     const modeNumbers: Record<string, number> = {
       STABILIZE: 0,
+      ACRO: 1,
+      ALT_HOLD: 2,
       AUTO: 3,
       GUIDED: 4,
       LOITER: 5,
       RTL: 6,
-      LAND: 9
+      LAND: 9,
+      POSHOLD: 16
     };
-    const customMode = modeNumbers[modeName] ?? 4;
+    const customMode = modeNumbers[modeName] ?? 0;
     this.addStatusMessage('NOTICE', 5, `Setting Flight Mode to ${modeName} (Custom Mode: ${customMode})...`);
 
     if (this.connectionState.isRealHardware) {
@@ -1425,25 +1478,38 @@ class MAVLinkService {
 
     const prefix = command === 400 ? (param1 === 1.0 ? '[ARM]' : '[DISARM]') : `[CMD_${command}]`;
 
-    if (command === 400) {
-      console.log(`${prefix} MAVLINK PACKET CREATED`);
-      console.log(`${prefix} PACKET LENGTH = ${packet.length}`);
-      console.log(`${prefix} PACKET HEX = ${hexDump}`);
-      console.log(`${prefix} WS SEND START`);
+    if (command === 400 && param1 === 1.0) {
+      this.connectionState.lastArmPacketState = 'CREATED';
+      this.connectionState.lastArmPacketLength = packet.length;
+      this.connectionState.lastArmPacketHex = hexDump;
+      this.connectionState.lastArmWsSendState = 'START';
+
+      console.log('[ARM] PACKET CREATED');
+      console.log(`[ARM] PACKET LENGTH = ${packet.length}`);
+      console.log(`[ARM] PACKET HEX = ${hexDump}`);
+      console.log('[ARM] WS SEND START');
     }
 
     this.logDiagnostic('MAVLINK', `[COMMAND_LONG TX] Sending cmd ${command} (p1=${param1}, p2=${param2}) to SysID ${targetSys} CompID ${targetComp} (${packet.length} bytes)`, 'info');
 
     const success = await usbHostService.sendBytes(packet);
     if (success) {
-      if (command === 400) {
-        console.log(`${prefix} WS SEND COMPLETE`);
+      if (command === 400 && param1 === 1.0) {
+        this.connectionState.lastArmWsSendState = 'COMPLETE';
+        console.log('[ARM] WS SEND COMPLETE');
+      } else if (command === 400 && param1 === 0.0) {
+        console.log('[DISARM] WS SEND COMPLETE');
       }
       this.connectionState.bytesSent += packet.length;
       this.logDiagnostic('MAVLINK', `[COMMAND_LONG TX] Successfully forwarded ${packet.length} bytes to transport bridge (Total TX: ${this.connectionState.bytesSent} B)`, 'success');
       this.notifyConnection();
     } else {
-      console.error(`${prefix} Failed to send binary packet through transport bridge (${packet.length} bytes)`);
+      if (command === 400 && param1 === 1.0) {
+        this.connectionState.lastArmWsSendState = 'FAILED';
+        console.error(`[ARM] WS SEND ERROR: Failed to send binary packet through transport bridge (${packet.length} bytes)`);
+      } else {
+        console.error(`${prefix} Failed to send binary packet through transport bridge (${packet.length} bytes)`);
+      }
       this.logDiagnostic('ERROR', `${prefix} Failed to send ${packet.length} bytes to transport`, 'error');
     }
     return success;
