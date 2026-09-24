@@ -100,7 +100,7 @@ class MAVLinkService {
     isConnected: false,
     isUsbConnected: false,
     portOrAddress: 'Disconnected',
-    baudRate: 115200,
+    baudRate: 57600,
     bytesReceived: 0,
     bytesSent: 0,
     lastHeartbeat: 0,
@@ -484,7 +484,7 @@ class MAVLinkService {
   /**
    * 1-Click Hardware Connection (Zero Port Selection Required)
    */
-  public async connectHardware(baudRate: number = 115200): Promise<boolean> {
+  public async connectHardware(baudRate: number = 57600): Promise<boolean> {
     if (this.simInterval) {
       clearInterval(this.simInterval);
       this.simInterval = null;

@@ -46,7 +46,7 @@ export class AndroidUsbTransport implements MavlinkTransport {
   private dataListeners: Set<(chunk: Uint8Array) => void> = new Set();
   private stateListeners: Set<(event: TransportStateEvent) => void> = new Set();
   private currentDevice: NativeUsbDevice | null = null;
-  private currentBaudRate: number = 115200;
+  private currentBaudRate: number = 57600;
   private isInitialized = false;
 
   constructor() {
@@ -148,7 +148,7 @@ export class AndroidUsbTransport implements MavlinkTransport {
       return false;
     }
 
-    const baudRate = options?.baudRate || 115200;
+    const baudRate = options?.baudRate || 57600;
     this.currentBaudRate = baudRate;
 
     try {

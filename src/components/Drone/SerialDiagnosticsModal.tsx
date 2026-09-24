@@ -37,7 +37,7 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
   onClose,
   connectionState
 }) => {
-  const [selectedBaud, setSelectedBaud] = useState<number>(connectionState.baudRate || 115200);
+  const [selectedBaud, setSelectedBaud] = useState<number>(connectionState.baudRate || 57600);
   const [isScanning, setIsScanning] = useState<boolean>(false);
   const [isActionInProgress, setIsActionInProgress] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'troubleshooting' | 'logs'>('overview');
@@ -442,8 +442,8 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
               onChange={(e) => setSelectedBaud(Number(e.target.value))}
               className="bg-slate-950 text-slate-200 text-xs px-2.5 py-1.5 rounded-lg border border-slate-700 cursor-pointer"
             >
-              <option value={115200}>115200 (Default Pixhawk USB / UART)</option>
-              <option value={57600}>57600 (TELEM1 / SiK Radio)</option>
+              <option value={57600}>57600 (Default TELEM1 / SiK Radio)</option>
+              <option value={115200}>115200 (Pixhawk USB / UART)</option>
               <option value={921600}>921600 (High-Speed Companion)</option>
               <option value={38400}>38400 (Legacy Telemetry)</option>
             </select>

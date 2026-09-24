@@ -8,7 +8,7 @@ class UsbHostService {
   private dataListeners: Set<DataListener> = new Set();
   private stateListeners: Set<StateListener> = new Set();
   private currentPhase: ConnectionPhase = 'DISCONNECTED';
-  private currentBaudRate: number = 115200;
+  private currentBaudRate: number = 57600;
 
   constructor() {
     transportManager.subscribeData((chunk) => {
@@ -95,7 +95,7 @@ class UsbHostService {
     return () => this.stateListeners.delete(fn);
   }
 
-  public async autoConnect(baudRate: number = 115200): Promise<boolean> {
+  public async autoConnect(baudRate: number = 57600): Promise<boolean> {
     this.currentBaudRate = baudRate;
     return await transportManager.connect({ baudRate });
   }

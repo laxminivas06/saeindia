@@ -40,7 +40,7 @@ public class UsbSerialPlugin extends Plugin {
 
     private Thread readThread;
     private final AtomicBoolean isReading = new AtomicBoolean(false);
-    private int currentBaudRate = 115200;
+    private int currentBaudRate = 57600;
     private long bytesReceived = 0;
     private long bytesSent = 0;
     private String currentPhase = "DISCONNECTED";
@@ -197,7 +197,7 @@ public class UsbSerialPlugin extends Plugin {
 
     @PluginMethod
     public void autoConnect(PluginCall call) {
-        int baudRate = call.getInt("baudRate", 115200);
+        int baudRate = call.getInt("baudRate", 57600);
         this.currentBaudRate = baudRate;
 
         if (usbManager == null) {

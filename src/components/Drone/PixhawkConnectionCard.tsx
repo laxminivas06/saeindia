@@ -39,7 +39,7 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
   const [isConnecting, setIsConnecting] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
-  const [selectedBaud, setSelectedBaud] = useState<number>(connectionState.baudRate || 115200);
+  const [selectedBaud, setSelectedBaud] = useState<number>(connectionState.baudRate || 57600);
   const [activeMethod, setActiveMethod] = useState<'USB' | 'NETWORK' | 'SIM'>('USB');
 
   const phase: ConnectionPhase = connectionState.phase;
@@ -418,9 +418,9 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
               onChange={(e) => handleBaudChange(Number(e.target.value))}
               className="bg-slate-950 text-slate-200 text-xs px-2.5 py-1 rounded-lg border border-slate-700 cursor-pointer"
             >
-              <option value={115200}>115200 (Default)</option>
-              <option value={57600}>57600 (Telemetry 1/2)</option>
-              <option value={921600}>921600 (High-Speed)</option>
+              <option value={57600}>57600 (Default Telemetry)</option>
+              <option value={115200}>115200 (USB / High-Speed)</option>
+              <option value={921600}>921600 (Fast UART)</option>
               <option value={38400}>38400 (Legacy)</option>
             </select>
           </div>
