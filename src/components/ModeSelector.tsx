@@ -53,14 +53,14 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({
       btnColor: 'bg-emerald-600 hover:bg-emerald-500'
     },
     {
-      id: 'MANUAL' as AppRole,
-      title: 'MANUAL CONTROL',
-      subtitle: 'Priority Flight Override • GPS Path Planning • Real-Time Manual Navigation',
-      description: 'Operator manual override with absolute priority over automated mission and runner inputs. Interactive GPS path creation, boundaries, and directional flight control.',
+      id: 'TESTBENCH' as AppRole,
+      title: 'FIELD OPS COMMAND TESTBENCH',
+      subtitle: 'Unified Multi-Device Live Simulation & Verification Bench',
+      description: 'Run all 3 devices (Ground Station, Drone, Runner) side-by-side on one screen to simulate the entire end-to-end 24-step SAE INDIA mission sequence.',
       icon: Layers,
-      badge: 'OPERATOR OVERRIDE',
-      accentColor: 'border-rose-500 hover:border-rose-400 bg-rose-950/20 hover:bg-rose-950/40 text-rose-400',
-      btnColor: 'bg-rose-600 hover:bg-rose-500'
+      badge: 'FULL SIMULATOR',
+      accentColor: 'border-purple-500 hover:border-purple-400 bg-purple-950/20 hover:bg-purple-950/40 text-purple-400',
+      btnColor: 'bg-purple-600 hover:bg-purple-500'
     }
   ];
 

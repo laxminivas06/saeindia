@@ -8,12 +8,10 @@ import { runnerCommService } from './services/runnerCommService';
 import { visionService } from './services/visionService';
 import { authService, UserSession } from './services/authService';
 import { Header } from './components/common/Header';
-import { ModeSelectorBar } from './components/common/ModeSelectorBar';
 import { LoginScreen } from './components/Auth/LoginScreen';
 import { GroundStationDashboard } from './components/GroundStation/GroundStationDashboard';
 import { DroneDashboard } from './components/Drone/DroneDashboard';
 import { RunnerDashboard } from './components/Runner/RunnerDashboard';
-import { ManualControlDashboard } from './components/Manual/ManualControlDashboard';
 import { MultiRoleSimBench } from './components/Testbench/MultiRoleSimBench';
 import { MissionHistoryModal } from './components/History/MissionHistoryModal';
 
@@ -32,8 +30,6 @@ export const App: React.FC = () => {
   const [decodedQR, setDecodedQR] = useState<DecodedQRData | null>(missionEngine.getDecodedQR());
   const [runnerAckReceived, setRunnerAckReceived] = useState<boolean>(false);
   const [runnerAckLatencyMs, setRunnerAckLatencyMs] = useState<number>(120);
-  const [isManualOverride, setIsManualOverride] = useState<boolean>(missionEngine.isManualOverride());
-  const [isMissionPaused, setIsMissionPaused] = useState<boolean>(missionEngine.isMissionPaused());
 
   // Pre-flight validation status
   const [preFlight, setPreFlight] = useState<{ isReady: boolean; checklist: PreFlightChecklist }>(
@@ -72,8 +68,6 @@ export const App: React.FC = () => {
       setRemainingSeconds(remaining);
       setDecodedQR(missionEngine.getDecodedQR());
       setPreFlight(missionEngine.checkPreFlight());
-      setIsManualOverride(missionEngine.isManualOverride());
-      setIsMissionPaused(missionEngine.isMissionPaused());
 
       if (state === 'RUNNER_CONFIRMED' || state === 'MISSION_COMPLETE') {
         setRunnerAckReceived(true);
@@ -94,26 +88,6 @@ export const App: React.FC = () => {
       unsubVision();
     };
   }, []);
-
-  // Safe Mode Switching Handler
-  // Rule 17 & 18: Switching modes does NOT send ARM or DISARM.
-  // Leaving Manual mode does NOT automatically resume movement.
-  const handleRoleSelect = (newRole: AppRole) => {
-    const currentRole = session ? session.role : 'GROUND_STATION';
-
-    if (newRole === 'MANUAL') {
-      missionEngine.setManualOverride(true);
-      setIsManualOverride(true);
-      setIsMissionPaused(missionEngine.isMissionPaused());
-    } else if (currentRole === 'MANUAL') {
-      missionEngine.setManualOverride(false);
-      setIsManualOverride(false);
-      setIsMissionPaused(missionEngine.isMissionPaused());
-      // Important: Does NOT send movement commands. Operator must explicitly resume.
-    }
-
-    authService.quickLogin(newRole);
-  };
 
   // Action Handlers
   const handleSetHomePoint = () => {
@@ -154,7 +128,7 @@ export const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-sae-dark text-slate-100 flex flex-col font-sans select-none">
-      {/* 1. Tactical Top App Header with Role Badge & Logout */}
+      {/* Tactical Top App Header with Role Badge & Logout */}
       <Header
         currentRole={currentRole}
         missionState={missionState}
@@ -166,19 +140,7 @@ export const App: React.FC = () => {
         onResetMission={handleResetMission}
       />
 
-      {/* 2. Section 1 Clean Four-Mode Selector Bar */}
-      {/* ┌──────────────────────────────────┐
-          │ DRONE CONTROL SYSTEM             │
-          │ Ground | Drone | Runner | Manual │
-          └──────────────────────────────────┘ */}
-      <ModeSelectorBar
-        currentRole={currentRole}
-        onSelectRole={handleRoleSelect}
-        isManualOverrideActive={isManualOverride}
-        isMissionPaused={isMissionPaused}
-      />
-
-      {/* 3. Main Dashboard Screen: Exactly One Selected Mode Shown */}
+      {/* Main Authenticated Dashboard Screen Based on Active Role */}
       <main className="flex-1 pb-10">
         {currentRole === 'GROUND_STATION' && (
           <GroundStationDashboard
@@ -194,7 +156,6 @@ export const App: React.FC = () => {
             onSetHomePoint={handleSetHomePoint}
             onStartMission={handleStartMission}
             onEmergencyRTL={handleEmergencyRTL}
-            onSwitchToManual={() => handleRoleSelect('MANUAL')}
           />
         )}
 
@@ -220,15 +181,6 @@ export const App: React.FC = () => {
             missionState={missionState}
             remainingSeconds={remainingSeconds}
             elapsedSeconds={elapsedSeconds}
-          />
-        )}
-
-        {currentRole === 'MANUAL' && (
-          <ManualControlDashboard
-            telemetry={telemetry}
-            homePoint={homePoint}
-            pixhawkState={pixhawkState}
-            missionState={missionState}
           />
         )}
 

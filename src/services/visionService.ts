@@ -1,7 +1,6 @@
 import jsQR from 'jsqr';
 import { DecodedQRData, PhotoCaptureEvent } from '../types/mission';
 import { audioService } from './audioService';
-import { videoStreamService } from './videoStreamService';
 
 export type VisionFilterMode = 'NORMAL' | 'OPENCV_BINARIZED' | 'OPENCV_EDGES' | 'OPENCV_CONTRAST' | 'NIGHT_VISION' | 'CYBER_HUD';
 
@@ -232,8 +231,6 @@ class VisionService {
         this.videoElement.srcObject = this.stream;
         await this.videoElement.play();
         this.useSimulatedFeed = false;
-        videoStreamService.setLocalMediaStream(this.stream);
-        videoStreamService.startBroadcasting(this.videoElement);
         this.notifyCameraState();
         this.startContinuousStreamScanning();
         this.startPeriodicCaptureLoop();
@@ -291,8 +288,6 @@ class VisionService {
         }
 
         this.useSimulatedFeed = false;
-        videoStreamService.setLocalMediaStream(stream);
-        videoStreamService.startBroadcasting(this.videoElement);
         this.notifyCameraState();
         this.startContinuousStreamScanning();
         this.startPeriodicCaptureLoop();
@@ -359,8 +354,6 @@ class VisionService {
     this.autoZoomSweepTimer = null;
     this.animFrameId = null;
 
-    videoStreamService.stopBroadcasting();
-    videoStreamService.setLocalMediaStream(null);
     if (this.stream) {
       this.stream.getTracks().forEach((track) => track.stop());
       this.stream = null;

@@ -47,10 +47,6 @@ class MissionEngine {
   private armingTimeoutTimer: any = null;
   private isAwaitingFcMotorStart: boolean = false;
 
-  // Manual Override Priority State
-  private isManualOverrideActive: boolean = false;
-  private isMissionPausedByManual: boolean = false;
-
   constructor() {
     this.currentMissionNumber = storageService.getNextMissionNumber();
     this.restorePersistentState();
@@ -161,9 +157,7 @@ class MissionEngine {
 
       if (this.currentState === 'TAKEOFF' && telemetry.altitude >= 18) {
         this.transitionTo('SEARCHING', 'Cruise altitude 20m reached. Autonomous lawnmower search active.');
-        if (!this.isManualOverrideActive && !this.isMissionPausedByManual) {
-          mavlinkService.commandStartSearch();
-        }
+        mavlinkService.commandStartSearch();
       }
 
       if (this.currentState === 'LANDING' && telemetry.altitude <= 0.3 && !telemetry.isArmed) {
@@ -217,40 +211,6 @@ class MissionEngine {
 
   public getDecodedQR(): DecodedQRData | null {
     return this.currentQRData;
-  }
-
-  public isManualOverride(): boolean {
-    return this.isManualOverrideActive;
-  }
-
-  public isMissionPaused(): boolean {
-    return this.isMissionPausedByManual;
-  }
-
-  public setManualOverride(active: boolean) {
-    if (active) {
-      this.isManualOverrideActive = true;
-      if (this.currentState === 'TAKEOFF' || this.currentState === 'SEARCHING' || this.currentState === 'BOX_TRACKING') {
-        this.isMissionPausedByManual = true;
-        mavlinkService.commandHold();
-      }
-    } else {
-      this.isManualOverrideActive = false;
-      // Leaving Manual mode: do NOT automatically resume movement commands.
-      // Flight controller remains in position hold until explicit operator action.
-    }
-    this.notifyState();
-  }
-
-  public resumeFromManualOverride() {
-    if (this.isMissionPausedByManual) {
-      this.isMissionPausedByManual = false;
-      this.isManualOverrideActive = false;
-      if (this.currentState === 'SEARCHING' || this.currentState === 'TAKEOFF') {
-        mavlinkService.commandStartSearch();
-      }
-      this.notifyState();
-    }
   }
 
   // Pre-Flight Validation Check
@@ -512,8 +472,6 @@ class MissionEngine {
     this.currentQRData = null;
     this.runnerAckReceived = false;
     this.runnerAckLatencyMs = 0;
-    this.isManualOverrideActive = false;
-    this.isMissionPausedByManual = false;
     this.clearPersistentState();
 
     this.notifyState();

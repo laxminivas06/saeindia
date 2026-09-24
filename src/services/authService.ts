@@ -32,14 +32,6 @@ export const ROLE_CREDENTIALS = {
     passkey: 'runner2026',
     stationId: 'STA_RUNNER_DIRECT',
     badge: 'GROUND RUNNER'
-  },
-  MANUAL: {
-    role: 'MANUAL' as AppRole,
-    title: 'Manual Control',
-    defaultCallsign: 'PILOT_OVERRIDE_01',
-    passkey: 'pilot2026',
-    stationId: 'STA_MANUAL_PILOT',
-    badge: 'OPERATOR OVERRIDE'
   }
 };
 

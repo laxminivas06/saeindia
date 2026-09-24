@@ -37,8 +37,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
       setCallsign(ROLE_CREDENTIALS.DRONE.defaultCallsign);
     } else if (role === 'RUNNER') {
       setCallsign(ROLE_CREDENTIALS.RUNNER.defaultCallsign);
-    } else if (role === 'MANUAL') {
-      setCallsign(ROLE_CREDENTIALS.MANUAL.defaultCallsign);
     } else {
       setCallsign('TESTBENCH_OPERATOR');
     }
@@ -79,10 +77,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
       color: 'text-emerald-400 border-emerald-500/50 bg-emerald-950/30'
     },
     {
-      id: 'MANUAL' as AppRole,
-      name: 'MANUAL CONTROL',
+      id: 'TESTBENCH' as AppRole,
+      name: 'SIM TESTBENCH',
       icon: Layers,
-      color: 'text-rose-400 border-rose-500/50 bg-rose-950/30'
+      color: 'text-purple-400 border-purple-500/50 bg-purple-950/30'
     }
   ];
 

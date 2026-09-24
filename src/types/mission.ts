@@ -1,20 +1,4 @@
-export type AppRole = 'GROUND_STATION' | 'DRONE' | 'RUNNER' | 'MANUAL' | 'TESTBENCH' | 'SELECT';
-
-export interface PathPoint {
-  id: string;
-  pointNumber: number;
-  latitude: number;
-  longitude: number;
-  altitude?: number;
-  timestamp?: number;
-}
-
-export interface PathBoundary {
-  minLat: number;
-  maxLat: number;
-  minLon: number;
-  maxLon: number;
-}
+export type AppRole = 'GROUND_STATION' | 'DRONE' | 'RUNNER' | 'TESTBENCH' | 'SELECT';
 
 export type MissionState =
   | 'IDLE'
