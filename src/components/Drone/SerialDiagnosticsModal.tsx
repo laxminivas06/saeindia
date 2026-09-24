@@ -49,7 +49,7 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
   const isConnected = connectionState.isConnected;
   const isUsbConnected = connectionState.isUsbConnected;
   const isUsbDetected = phase !== 'DISCONNECTED' && phase !== 'USB_NOT_DETECTED' && phase !== 'IOS_UNSUPPORTED';
-  const hasPermission = diag.hasPermission !== false && phase !== 'PERMISSION_DENIED' && phase !== 'REQUESTING_PERMISSION';
+  const hasPermission = diag.hasPermission !== false && phase !== 'PERMISSION_DENIED' && phase !== 'USB_PERMISSION_REQUIRED' && phase !== 'REQUESTING_PERMISSION';
 
   const lastHeartbeatAge = connectionState.lastHeartbeat
     ? Math.max(0, Math.round((Date.now() - connectionState.lastHeartbeat) / 1000))
@@ -109,10 +109,10 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
             </div>
             <div>
               <h2 className="text-sm sm:text-base font-black uppercase text-white tracking-wider flex items-center space-x-2">
-                <span>PIXHAWK USB CONNECTION DIAGNOSTICS</span>
+                <span>USB DIAGNOSTICS &amp; OTG CONNECTION</span>
               </h2>
               <p className="text-[10px] sm:text-[11px] text-slate-400">
-                Low-level Android USB Host, endpoint descriptors & MAVLink parser
+                Android USB Host enumeration, interface descriptors &amp; MAVLink parser state
               </p>
             </div>
           </div>
@@ -135,7 +135,7 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
                 : 'bg-slate-800 text-slate-400 hover:text-white'
             }`}
           >
-            Status & Overview
+            Status &amp; Overview
           </button>
           <button
             onClick={() => setActiveTab('troubleshooting')}
@@ -145,7 +145,7 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
                 : 'bg-slate-800 text-slate-400 hover:text-white'
             }`}
           >
-            OTG & Power Checklist
+            OTG &amp; Power Troubleshooting
           </button>
           <button
             onClick={() => setActiveTab('logs')}
@@ -167,58 +167,76 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
           
           {activeTab === 'overview' && (
             <>
-              {/* Top Summary Status Grid (as requested in requirement 3) */}
+              {/* Comprehensive USB Diagnostics Table (Section 12 Requirements) */}
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 text-xs">
                 
-                {/* USB Status */}
+                {/* 1. Android USB Host */}
                 <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">USB Status</div>
-                  <div className="font-bold flex items-center space-x-1.5 mt-1">
-                    {isUsbDetected ? (
-                      <>
-                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                        <span className="text-emerald-400">🟢 Device Detected</span>
-                      </>
+                  <div className="text-[10px] text-slate-500 uppercase font-bold">Android USB Host</div>
+                  <div className="font-bold flex items-center space-x-1 mt-1">
+                    {diag.isUsbHostSupported !== false ? (
+                      <span className="text-emerald-400">Supported ✓</span>
                     ) : (
-                      <>
-                        <span className="w-2 h-2 rounded-full bg-rose-500"></span>
-                        <span className="text-rose-400">🔴 Not Detected</span>
-                      </>
+                      <span className="text-rose-400">Unsupported</span>
                     )}
                   </div>
                 </div>
 
-                {/* Device Name */}
+                {/* 2. OTG Device Count */}
                 <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">Device</div>
-                  <div className="font-bold text-slate-200 truncate mt-1" title={diag.productName}>
-                    {diag.productName || (isUsbDetected ? 'Pixhawk / FC' : 'None')}
+                  <div className="text-[10px] text-slate-500 uppercase font-bold">OTG Device Count</div>
+                  <div className="font-bold text-sky-300 mt-1">
+                    {diag.connectedDeviceCount ?? (isUsbDetected ? 1 : 0)} connected
                   </div>
                 </div>
 
-                {/* VID / PID */}
+                {/* 3. Device Name */}
                 <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">VID / PID</div>
+                  <div className="text-[10px] text-slate-500 uppercase font-bold">Device Name</div>
+                  <div className="font-bold text-slate-200 truncate mt-1" title={diag.productName || 'None'}>
+                    {diag.productName || (isUsbDetected ? 'Pixhawk / USB Serial' : 'None')}
+                  </div>
+                </div>
+
+                {/* 4. Vendor ID */}
+                <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                  <div className="text-[10px] text-slate-500 uppercase font-bold">Vendor ID (VID)</div>
                   <div className="font-bold text-emerald-400 mt-1">
-                    {formatHex(diag.vendorId)} : {formatHex(diag.productId)}
+                    {formatHex(diag.vendorId)}
                   </div>
                 </div>
 
-                {/* USB Interface */}
+                {/* 5. Product ID */}
                 <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">USB Interface</div>
-                  <div className="font-bold text-sky-400 mt-1 truncate">
-                    {isUsbConnected ? `CDC-ACM (EP ${diag.endpointIn || 1} IN / ${diag.endpointOut || 2} OUT)` : 'Standby'}
+                  <div className="text-[10px] text-slate-500 uppercase font-bold">Product ID (PID)</div>
+                  <div className="font-bold text-emerald-400 mt-1">
+                    {formatHex(diag.productId)}
                   </div>
                 </div>
 
-                {/* Permission */}
+                {/* 6. Interface Count */}
                 <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">Permission</div>
+                  <div className="text-[10px] text-slate-500 uppercase font-bold">Interface Count</div>
+                  <div className="font-bold text-slate-200 mt-1">
+                    {diag.interfaceCount ?? (isUsbDetected ? 2 : 0)} interfaces
+                  </div>
+                </div>
+
+                {/* 7. Interface Type */}
+                <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                  <div className="text-[10px] text-slate-500 uppercase font-bold">Interface Type</div>
+                  <div className="font-bold text-sky-400 mt-1 truncate" title={diag.interfaceType || 'CDC ACM'}>
+                    {diag.interfaceType || (isUsbDetected ? 'USB CDC ACM' : 'Standby')}
+                  </div>
+                </div>
+
+                {/* 8. Permission Status */}
+                <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                  <div className="text-[10px] text-slate-500 uppercase font-bold">Permission Status</div>
                   <div className="font-bold mt-1">
                     {phase === 'PERMISSION_DENIED' ? (
                       <span className="text-rose-400">Denied</span>
-                    ) : phase === 'REQUESTING_PERMISSION' ? (
+                    ) : phase === 'USB_PERMISSION_REQUIRED' || phase === 'REQUESTING_PERMISSION' ? (
                       <span className="text-amber-400">Requesting...</span>
                     ) : hasPermission && isUsbDetected ? (
                       <span className="text-emerald-400">Granted ✓</span>
@@ -228,70 +246,73 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
                   </div>
                 </div>
 
-                {/* USB Connection */}
+                {/* 9. Serial Driver */}
                 <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">USB Connection</div>
+                  <div className="text-[10px] text-slate-500 uppercase font-bold">Serial Driver</div>
+                  <div className="font-bold text-purple-300 mt-1">
+                    {diag.driverType || 'NATIVE_ANDROID_USB'}
+                  </div>
+                </div>
+
+                {/* 10. Selected Baud Rate */}
+                <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                  <div className="text-[10px] text-slate-500 uppercase font-bold">Selected Baud Rate</div>
+                  <div className="font-bold text-sky-300 mt-1">
+                    {connectionState.baudRate} baud
+                  </div>
+                </div>
+
+                {/* 11. Serial Connection Status */}
+                <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                  <div className="text-[10px] text-slate-500 uppercase font-bold">Serial Connection</div>
                   <div className="font-bold mt-1">
                     {isUsbConnected ? (
-                      <span className="text-emerald-400">Connected ({connectionState.baudRate})</span>
+                      <span className="text-emerald-400">Open ✓ ({connectionState.bytesReceived} bytes rx)</span>
                     ) : (
-                      <span className="text-slate-400">Disconnected</span>
+                      <span className="text-slate-400">Closed</span>
                     )}
                   </div>
                 </div>
 
-                {/* MAVLink Heartbeat */}
+                {/* 12. MAVLink Status */}
                 <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">MAVLink</div>
+                  <div className="text-[10px] text-slate-500 uppercase font-bold">MAVLink Status</div>
                   <div className="font-bold mt-1 truncate">
                     {isConnected ? (
-                      <span className="text-emerald-400">Connected ({connectionState.heartbeatHz || 1.0} Hz)</span>
-                    ) : phase === 'WAITING_FOR_HEARTBEAT' ? (
-                      <span className="text-amber-400">Waiting for heartbeat…</span>
-                    ) : phase === 'HEARTBEAT_TIMEOUT' ? (
-                      <span className="text-amber-400">Heartbeat Timeout</span>
+                      <span className="text-emerald-400">Connected ({diag.totalPacketsReceived} pkts)</span>
                     ) : (
                       <span className="text-slate-400">Standby</span>
                     )}
                   </div>
                 </div>
 
-                {/* Flight Controller Autopilot */}
+                {/* 13. Last Heartbeat */}
                 <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">Flight Controller</div>
-                  <div className="font-bold text-purple-300 mt-1 truncate">
-                    {isConnected ? (connectionState.autopilotType || 'Detected') : 'Not detected'}
-                  </div>
-                </div>
-              </div>
-
-              {/* System & Component ID Banner */}
-              <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                <div>
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">System ID</div>
-                  <div className="font-bold text-emerald-400 text-sm mt-0.5">
-                    {connectionState.systemId ?? 1}
+                  <div className="text-[10px] text-slate-500 uppercase font-bold">Last Heartbeat</div>
+                  <div className="font-bold mt-1">
+                    {lastHeartbeatAge !== null ? (
+                      <span className={lastHeartbeatAge < 3 ? 'text-emerald-400' : 'text-amber-400'}>
+                        {lastHeartbeatAge}s ago ({connectionState.heartbeatHz || 1.0} Hz)
+                      </span>
+                    ) : (
+                      <span className="text-slate-500">None</span>
+                    )}
                   </div>
                 </div>
 
-                <div>
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">Component ID</div>
-                  <div className="font-bold text-emerald-400 text-sm mt-0.5">
-                    {connectionState.componentId ?? 1}
+                {/* 14. System ID & Component ID */}
+                <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                  <div className="text-[10px] text-slate-500 uppercase font-bold">System ID / Comp ID</div>
+                  <div className="font-bold text-emerald-400 mt-1">
+                    Sys: {connectionState.systemId ?? 1} | Comp: {connectionState.componentId ?? 1}
                   </div>
                 </div>
 
-                <div>
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">Vehicle Type</div>
-                  <div className="font-bold text-slate-200 mt-0.5">
-                    {diag.vehicleType || 'QUADROTOR'}
-                  </div>
-                </div>
-
-                <div>
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">MAVLink Version</div>
-                  <div className="font-bold text-sky-400 mt-0.5">
-                    {connectionState.mavlinkVersion || 'MAVLink 2.0'}
+                {/* 15. Endpoints */}
+                <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 col-span-2">
+                  <div className="text-[10px] text-slate-500 uppercase font-bold">USB Bulk Endpoints</div>
+                  <div className="font-bold text-slate-300 mt-1 text-[11px]">
+                    IN: EP {diag.endpointIn || 1} ({diag.endpointIn || 64}B max) | OUT: EP {diag.endpointOut || 2} ({diag.endpointOut || 64}B max)
                   </div>
                 </div>
               </div>
@@ -304,9 +325,9 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
                     <span>Flight Controller STATUSTEXT Messages ({connectionState.statusHistory.length})</span>
                   </div>
                 </div>
-                <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 max-h-32 overflow-y-auto text-[11px] space-y-1">
+                <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 max-h-32 overflow-y-auto text-[11px] space-y-1 font-mono">
                   {connectionState.statusHistory.length === 0 ? (
-                    <div className="text-slate-600 italic">No messages received yet. Connect Pixhawk to stream console log.</div>
+                    <div className="text-slate-600 italic">No console messages received yet. Connect Pixhawk to stream console log.</div>
                   ) : (
                     connectionState.statusHistory.map((msg) => (
                       <div key={msg.id} className="flex items-start space-x-2 leading-tight">
@@ -331,61 +352,36 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
 
           {activeTab === 'troubleshooting' && (
             <div className="space-y-3 text-xs">
-              {/* OTG Power Indicator */}
-              <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
-                <div className="font-bold text-sky-400 uppercase flex items-center space-x-2">
+              {/* Power Condition Card */}
+              <div className="p-3.5 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
+                <div className="font-bold text-amber-400 uppercase flex items-center space-x-2">
                   <Zap className="w-4 h-4" />
-                  <span>USB Power & Host Status</span>
+                  <span>Pixhawk Power Condition &amp; Host Limitation</span>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px]">
-                  <div className="p-2 bg-slate-900 rounded-lg border border-slate-800">
-                    <div className="text-slate-500 text-[10px]">Host USB Mode</div>
-                    <div className="text-emerald-400 font-bold">Host Detected ✓</div>
-                  </div>
-                  <div className="p-2 bg-slate-900 rounded-lg border border-slate-800">
-                    <div className="text-slate-500 text-[10px]">Device Power State</div>
-                    <div className="text-slate-200 font-bold">Device Powered / Battery</div>
-                  </div>
-                  <div className="p-2 bg-slate-900 rounded-lg border border-slate-800">
-                    <div className="text-slate-500 text-[10px]">Data Link</div>
-                    <div className={isUsbConnected ? 'text-emerald-400 font-bold' : 'text-slate-400 font-bold'}>
-                      {isUsbConnected ? 'Active' : 'Inactive'}
-                    </div>
-                  </div>
-                </div>
-                <p className="text-[11px] text-slate-400 leading-relaxed">
-                  <strong>Power Tip:</strong> Pixhawk flight controllers draw significant current during startup. If phone battery is low, power the Pixhawk with its LiPo battery/power module while keeping USB connected for data.
+                <p className="text-[11px] text-slate-300 leading-relaxed">
+                  <strong>Notice:</strong> Pixhawk flight controllers with GPS, telemetry modules, and servos can draw more current than a smartphone USB-OTG port supplies (max ~500mA). If the flight controller reboots or disconnects when plugged into the phone:
                 </p>
+                <div className="p-2.5 bg-amber-950/40 border border-amber-500/30 rounded-lg text-amber-200 text-[11px]">
+                  <strong>Recommended:</strong> Power the Pixhawk via its dedicated LiPo Power Module / PDB while connecting the USB cable to the phone solely for MAVLink serial data transfer.
+                </div>
               </div>
 
-              {/* Step-by-Step Diagnostic Checklist */}
-              <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
-                <div className="font-bold text-amber-400 uppercase flex items-center space-x-2">
+              {/* Step-by-Step 7-Point Diagnostic Checklist (Requirement 14) */}
+              <div className="p-3.5 bg-slate-950 rounded-xl border border-slate-800 space-y-2.5">
+                <div className="font-bold text-sky-400 uppercase flex items-center space-x-2">
                   <ShieldCheck className="w-4 h-4" />
-                  <span>OTG Connection Diagnostic Steps</span>
+                  <span>USB Cable &amp; OTG Diagnostic Checklist</span>
                 </div>
-                <ul className="space-y-1.5 text-[11px] text-slate-300">
-                  <li className="flex items-center space-x-2">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-                    <span><strong>1. Verify OTG is enabled:</strong> Some phones (OnePlus, Oppo, Vivo, Xiaomi) require enabling "OTG Connection" in System Settings.</span>
-                  </li>
-                  <li className="flex items-center space-x-2">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-                    <span><strong>2. Verify USB cable supports data:</strong> Ensure the cable is not a charge-only cable.</span>
-                  </li>
-                  <li className="flex items-center space-x-2">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-                    <span><strong>3. Verify Pixhawk is powered:</strong> Pixhawk status LEDs should blink and tones should sound.</span>
-                  </li>
-                  <li className="flex items-center space-x-2">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-                    <span><strong>4. Disconnect / Reconnect USB:</strong> Android will re-trigger the USB Host attach broadcast automatically.</span>
-                  </li>
-                  <li className="flex items-center space-x-2">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-                    <span><strong>5. Try another OTG adapter or cable:</strong> Defective OTG pins are the most common source of connection loss.</span>
-                  </li>
-                </ul>
+                <p className="text-[11px] text-slate-400">If zero USB devices are detected by Android, verify the following 7 points:</p>
+                <ol className="space-y-1.5 text-[11px] text-slate-200 list-decimal list-inside">
+                  <li><strong>Verify phone supports USB OTG/USB Host:</strong> Ensure OTG support is active in Android system settings.</li>
+                  <li><strong>Verify the OTG adapter supports data transfer:</strong> Some cheap OTG adapters are charge-only or missing the ID pin bridge.</li>
+                  <li><strong>Verify the USB cable is a 4-wire data cable:</strong> Charge-only cables will not transmit serial packets.</li>
+                  <li><strong>Verify the Pixhawk is powered:</strong> Pixhawk main status LED should cycle and tones should sound.</li>
+                  <li><strong>Verify the correct Pixhawk USB port is being used:</strong> Use the primary micro-USB port on the side of the Pixhawk chassis.</li>
+                  <li><strong>Disconnect and reconnect the OTG adapter:</strong> Android OS re-enumerates the USB host tree upon re-insertion.</li>
+                  <li><strong>Retry USB device scan:</strong> Click "Scan USB Devices" below.</li>
+                </ol>
               </div>
             </div>
           )}
@@ -436,20 +432,20 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
 
         </div>
 
-        {/* Modal Action Buttons (Section 3 Requirements) */}
+        {/* Modal Action Buttons Footer */}
         <div className="pt-3 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2 shrink-0">
           {/* Baud Rate Override */}
           <div className="flex items-center space-x-2">
-            <span className="text-[11px] text-slate-400 font-bold uppercase">Baud:</span>
+            <span className="text-[11px] text-slate-400 font-bold uppercase">Baud Rate:</span>
             <select
               value={selectedBaud}
               onChange={(e) => setSelectedBaud(Number(e.target.value))}
               className="bg-slate-950 text-slate-200 text-xs px-2.5 py-1.5 rounded-lg border border-slate-700 cursor-pointer"
             >
-              <option value={115200}>115200 (Pixhawk USB / UART)</option>
+              <option value={115200}>115200 (Default Pixhawk USB / UART)</option>
               <option value={57600}>57600 (TELEM1 / SiK Radio)</option>
               <option value={921600}>921600 (High-Speed Companion)</option>
-              <option value={38400}>38400 (Legacy)</option>
+              <option value={38400}>38400 (Legacy Telemetry)</option>
             </select>
           </div>
 
@@ -461,7 +457,7 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
               className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-sky-400 rounded-xl text-xs font-bold transition flex items-center space-x-1 border border-slate-700 cursor-pointer"
             >
               <Search className={`w-3.5 h-3.5 ${isScanning ? 'animate-spin' : ''}`} />
-              <span>Scan USB Devices</span>
+              <span>Scan USB</span>
             </button>
 
             <button

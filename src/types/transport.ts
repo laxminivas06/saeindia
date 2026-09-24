@@ -17,6 +17,8 @@ export interface TransportStateEvent {
     vendorId?: number;
     productId?: number;
     interfaceCount?: number;
+    interfaceType?: string;
+    driverType?: string;
     selectedInterface?: number;
     endpointIn?: number;
     endpointOut?: number;
@@ -26,6 +28,7 @@ export interface TransportStateEvent {
       id: number;
       interfaceClass: number;
       interfaceSubclass: number;
+      interfaceProtocol?: number;
       endpointCount: number;
     }>;
   };

@@ -7,7 +7,10 @@ export interface NativeUsbDevice {
   productId: number;
   deviceClass: number;
   deviceSubclass: number;
+  deviceProtocol?: number;
   interfaceCount: number;
+  interfaceType?: string;
+  driverType?: string;
   productName: string;
   manufacturerName: string;
   serialNumber: string;
@@ -15,6 +18,7 @@ export interface NativeUsbDevice {
     id: number;
     interfaceClass: number;
     interfaceSubclass: number;
+    interfaceProtocol?: number;
     endpointCount: number;
   }>;
 }
@@ -85,10 +89,10 @@ export class AndroidUsbTransport implements MavlinkTransport {
           this.currentDevice = event.device;
           this.notifyState({
             phase: 'USB_DEVICE_DETECTED',
-            message: `Pixhawk USB OTG connected: ${event.device.productName || 'Flight Controller'}`,
+            message: `USB device attached: ${event.device.productName || 'Pixhawk Flight Controller'}`,
             device: event.device
           });
-          // Automatically trigger auto-connect
+          // Automatically trigger auto-connect & permission request
           await this.connect({ baudRate: this.currentBaudRate });
         }
       });
@@ -96,8 +100,8 @@ export class AndroidUsbTransport implements MavlinkTransport {
       await UsbSerial.addListener('usbDetached', () => {
         this.currentDevice = null;
         this.notifyState({
-          phase: 'DISCONNECTED',
-          message: 'Flight Controller Disconnected (USB cable removed)'
+          phase: 'CONNECTION_LOST',
+          message: 'Pixhawk connection lost (USB cable disconnected)'
         });
       });
     } catch (err) {
@@ -120,7 +124,7 @@ export class AndroidUsbTransport implements MavlinkTransport {
     if (!this.isAvailable()) return false;
     try {
       this.notifyState({
-        phase: 'REQUESTING_PERMISSION',
+        phase: 'USB_PERMISSION_REQUIRED',
         message: 'Requesting Android USB permission...'
       });
       const res = await UsbSerial.requestPermission();
@@ -159,7 +163,7 @@ export class AndroidUsbTransport implements MavlinkTransport {
         return true;
       } else {
         const phase = res?.phase || 'USB_NOT_DETECTED';
-        const errMsg = res?.error || 'No USB flight controller detected. Verify OTG is enabled & cable supports data.';
+        const errMsg = res?.error || 'No USB device detected. Verify the OTG adapter supports data and Pixhawk is powered.';
         this.notifyState({
           phase,
           message: errMsg,
@@ -170,7 +174,7 @@ export class AndroidUsbTransport implements MavlinkTransport {
     } catch (err: any) {
       const errMsg = err?.message || 'USB Host connection error';
       this.notifyState({
-        phase: 'USB_OPEN_FAILED',
+        phase: 'SERIAL_OPEN_FAILED',
         message: errMsg,
         error: errMsg
       });
@@ -227,6 +231,7 @@ export class AndroidUsbTransport implements MavlinkTransport {
     if (!this.isAvailable()) {
       return {
         driverType: 'NATIVE_ANDROID_USB',
+        isUsbHostSupported: false,
         available: false
       };
     }
@@ -239,17 +244,21 @@ export class AndroidUsbTransport implements MavlinkTransport {
         vendorId: diag?.device?.vendorId,
         productId: diag?.device?.productId,
         interfaceCount: diag?.device?.interfaceCount,
+        interfaceType: diag?.device?.interfaceType || diag?.interfaceType,
+        driverType: diag?.device?.driverType || 'NATIVE_ANDROID_USB',
         endpointIn: diag?.endpointInNumber,
         endpointOut: diag?.endpointOutNumber,
         hasPermission: diag?.hasPermission,
         baudRate: diag?.baudRate || this.currentBaudRate,
-        driverType: 'NATIVE_ANDROID_USB',
+        isUsbHostSupported: diag?.isUsbHostSupported ?? true,
+        connectedDeviceCount: diag?.connectedDeviceCount ?? 1,
         lastError: diag?.lastError,
         hostPowerStatus: 'HOST_ACTIVE'
       };
     } catch (e) {
       return {
         driverType: 'NATIVE_ANDROID_USB',
+        isUsbHostSupported: true,
         available: true
       };
     }

@@ -34,21 +34,34 @@ export type FlightControllerConnection =
   | 'SIMULATED';
 
 export type ConnectionPhase =
+  // Standard Connection State Machine (per SAEISS spec)
   | 'DISCONNECTED'
   | 'USB_DEVICE_DETECTED'
+  | 'USB_PERMISSION_REQUIRED'
+  | 'USB_PERMISSION_GRANTED'
+  | 'SERIAL_OPENING'
+  | 'SERIAL_OPEN'
+  | 'WAITING_FOR_MAVLINK'
+  | 'HEARTBEAT_RECEIVED'
+  | 'PIXHAWK_CONNECTED'
+  | 'TELEMETRY_ACTIVE'
+  // Intermediate aliases
   | 'REQUESTING_PERMISSION'
   | 'PERMISSION_GRANTED'
   | 'OPENING_USB'
   | 'USB_CONNECTED'
   | 'WAITING_FOR_HEARTBEAT'
   | 'MAVLINK_CONNECTED'
-  | 'TELEMETRY_ACTIVE'
-  // Failure / Diagnostics states
+  // Diagnostic Failure States
   | 'USB_NOT_DETECTED'
   | 'PERMISSION_DENIED'
-  | 'USB_OPEN_FAILED'
+  | 'UNSUPPORTED_DEVICE'
   | 'INTERFACE_NOT_SUPPORTED'
+  | 'SERIAL_OPEN_FAILED'
+  | 'NO_SERIAL_DATA'
+  | 'NO_MAVLINK_HEARTBEAT'
   | 'HEARTBEAT_TIMEOUT'
+  | 'CONNECTION_LOST'
   | 'MAVLINK_ERROR'
   | 'IOS_UNSUPPORTED';
 
@@ -68,6 +81,7 @@ export interface UsbDeviceDiagnostics {
   productId?: number;
   interfaceCount?: number;
   selectedInterface?: number;
+  interfaceType?: string;
   endpointIn?: number;
   endpointOut?: number;
   hasPermission?: boolean;
@@ -83,6 +97,9 @@ export interface UsbDeviceDiagnostics {
   driverType: 'NATIVE_ANDROID_USB' | 'IOS_ACCESSORY' | 'WEBSERIAL' | 'WEBUSB' | 'UDP' | 'TCP' | 'SIMULATOR';
   lastError?: string;
   hostPowerStatus?: 'HOST_ACTIVE' | 'DEVICE_POWERED' | 'CHECK_EXTERNAL_POWER' | 'UNKNOWN';
+  isUsbHostSupported?: boolean;
+  connectedDeviceCount?: number;
+  serialDataReceived?: boolean;
 }
 
 export interface PixhawkStatusMessage {
@@ -97,8 +114,8 @@ export interface PixhawkConnectionState {
   connectionType: FlightControllerConnection;
   phase: ConnectionPhase;
   phaseMessage: string;
-  isConnected: boolean; // Only true when valid HEARTBEAT is verified
-  isUsbConnected: boolean; // True when physical USB/transport link is active
+  isConnected: boolean; // True ONLY when MAVLink HEARTBEAT is confirmed
+  isUsbConnected: boolean; // True when physical serial link is open
   portOrAddress: string;
   baudRate: number;
   bytesReceived: number;
