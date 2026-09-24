@@ -566,6 +566,7 @@ class MAVLinkService {
     secureEndpoint?: string;
     protocol?: 'ws' | 'wss';
     baudRate?: number;
+    wifiSsid?: string;
   } | string, port: number = 8080, protocol: 'ws' | 'wss' = 'ws', baudRate: number = 57600): Promise<boolean> {
     if (this.simInterval) {
       clearInterval(this.simInterval);
@@ -579,6 +580,7 @@ class MAVLinkService {
       secureEndpoint: string;
       protocol: 'ws' | 'wss';
       baudRate: number;
+      wifiSsid?: string;
     };
 
     if (typeof options === 'string') {
@@ -589,7 +591,8 @@ class MAVLinkService {
         port,
         secureEndpoint: `${options}:${port}`,
         protocol,
-        baudRate
+        baudRate,
+        wifiSsid: transportManager.getEsp32Transport().getWifiSsid()
       };
     } else {
       const mode = options?.mode || 'LOCAL';
@@ -598,6 +601,7 @@ class MAVLinkService {
       const secureEp = (options?.secureEndpoint || 'relay.example.com:8443').trim();
       const proto = options?.protocol || (mode === 'SECURE' ? 'wss' : 'ws');
       const baud = options?.baudRate || 57600;
+      const ssid = options?.wifiSsid || transportManager.getEsp32Transport().getWifiSsid();
 
       resolvedOptions = {
         mode,
@@ -605,7 +609,8 @@ class MAVLinkService {
         port: p,
         secureEndpoint: secureEp,
         protocol: proto,
-        baudRate: baud
+        baudRate: baud,
+        wifiSsid: ssid
       };
     }
 
@@ -625,7 +630,30 @@ class MAVLinkService {
       'info'
     );
 
+    this.connectionState.wifiSsid = resolvedOptions.wifiSsid || transportManager.getEsp32Transport().getWifiSsid();
+    this.connectionState.wifiState = 'CONNECTED';
+
     return await usbHostService.connectEsp32(resolvedOptions);
+  }
+
+  public getWifiSsid(): string {
+    return transportManager.getEsp32Transport().getWifiSsid();
+  }
+
+  public setWifiSsid(ssid: string): void {
+    transportManager.getEsp32Transport().setWifiSsid(ssid);
+    this.connectionState.wifiSsid = ssid;
+    this.connectionState.wifiState = 'CONNECTED';
+    this.logDiagnostic('TRANSPORT', `Wi-Fi SSID updated to: ${ssid}`, 'info');
+    this.notifyConnection();
+  }
+
+  public resetWifi(): void {
+    transportManager.getEsp32Transport().resetWifi();
+    this.connectionState.wifiSsid = undefined;
+    this.connectionState.wifiState = 'DISCONNECTED';
+    this.logDiagnostic('TRANSPORT', 'Wi-Fi configuration reset by user.', 'warn');
+    this.notifyConnection();
   }
 
   public async checkEsp32Http(host?: string): Promise<{ reachable: boolean; latencyMs?: number; message?: string }> {

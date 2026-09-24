@@ -452,7 +452,7 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
                 <div className="text-slate-300 space-y-1 text-[11px]">
                   <div><strong>Method A (Direct USB):</strong> Micro-USB to USB-C OTG cable from Pixhawk Micro-USB port to Phone.</div>
                   <div><strong>Method B (TELEM1 / UART):</strong> Pixhawk TELEM1 port ➔ CP2102/FTDI UART Module (57600 baud) ➔ USB-OTG ➔ Phone.</div>
-                  <div><strong>Method C (ESP32-S3 Wi-Fi):</strong> Pixhawk TELEM2 port ➔ ESP32-S3 ➔ Wi-Fi WebSocket (ws://192.168.4.1:8080).</div>
+                  <div><strong>Method C (ESP32-S3 Wi-Fi):</strong> Pixhawk TELEM2 port ➔ ESP32-S3 ➔ Local (ws://ESP32-IP:8080) or Secure HTTPS Relay (wss://...).</div>
                 </div>
               </div>
 

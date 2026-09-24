@@ -22,7 +22,10 @@ import {
   Zap,
   Wifi,
   Globe,
-  Server
+  Server,
+  Lock,
+  Network,
+  ShieldAlert
 } from 'lucide-react';
 
 interface SerialDiagnosticsModalProps {
@@ -48,6 +51,9 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
   const isConnected = connectionState.isConnected;
   const isUsbConnected = connectionState.isUsbConnected;
   const isEsp32 = connectionState.connectionType === 'ESP32_WEBSOCKET';
+
+  const pageProtocol = typeof window !== 'undefined' ? window.location.protocol.replace(':', '').toUpperCase() : 'HTTP';
+  const isHttpsOrigin = typeof window !== 'undefined' && window.location.protocol === 'https:';
 
   const isUsbDetected =
     phase !== 'DISCONNECTED' &&
@@ -100,11 +106,6 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
     }
   };
 
-  const formatHex = (val?: number) => {
-    if (val === undefined || val === null) return 'N/A';
-    return '0x' + val.toString(16).toUpperCase().padStart(4, '0');
-  };
-
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 font-mono select-none overflow-y-auto">
       <div className="bg-slate-900 border-2 border-slate-700 rounded-2xl max-w-4xl w-full p-3.5 sm:p-6 space-y-4 text-slate-200 shadow-2xl relative my-auto max-h-[92vh] flex flex-col">
@@ -154,7 +155,7 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
             }`}
           >
             <Wifi className="w-3.5 h-3.5" />
-            <span>ESP32-S3 Wireless</span>
+            <span>ESP32 &amp; WSS Network</span>
           </button>
           <button
             onClick={() => setActiveTab('troubleshooting')}
@@ -293,46 +294,60 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
             </>
           )}
 
-          {/* TAB 2: ESP32-S3 WIRELESS MATRIX */}
+          {/* TAB 2: ESP32-S3 WIRELESS & NETWORK MATRIX */}
           {activeTab === 'esp32' && (
             <div className="space-y-3 text-xs">
               <div className="p-3.5 bg-purple-950/30 border border-purple-500/40 rounded-xl space-y-3">
                 <div className="font-bold text-purple-300 uppercase flex items-center space-x-2">
                   <Wifi className="w-4 h-4" />
-                  <span>ESP32-S3 Wireless MAVLink Bridge Parameters</span>
+                  <span>ESP32-S3 Wireless MAVLink Bridge &amp; Network State</span>
                 </div>
+                
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[11px]">
                   <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
-                    <span className="text-slate-500 font-bold uppercase text-[10px]">Active Address</span>
-                    <div className="font-mono text-purple-300 font-bold mt-0.5">{connectionState.portOrAddress}</div>
+                    <span className="text-slate-500 font-bold uppercase text-[10px]">Page Origin Protocol</span>
+                    <div className={`font-mono font-bold mt-0.5 ${isHttpsOrigin ? 'text-sky-400' : 'text-emerald-400'}`}>
+                      {pageProtocol} ({typeof window !== 'undefined' ? window.location.origin : 'N/A'})
+                    </div>
                   </div>
+
+                  <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-slate-500 font-bold uppercase text-[10px]">Active Address / URL</span>
+                    <div className="font-mono text-purple-300 font-bold mt-0.5 truncate">{connectionState.portOrAddress}</div>
+                  </div>
+
                   <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
                     <span className="text-slate-500 font-bold uppercase text-[10px]">UART Baud Rate</span>
                     <div className="font-mono text-emerald-400 font-bold mt-0.5">{connectionState.baudRate} baud</div>
                   </div>
+
                   <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
                     <span className="text-slate-500 font-bold uppercase text-[10px]">RX Byte Counter</span>
                     <div className="font-mono text-sky-400 font-bold mt-0.5">{connectionState.bytesReceived} bytes</div>
                   </div>
+
                   <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
                     <span className="text-slate-500 font-bold uppercase text-[10px]">TX Byte Counter</span>
                     <div className="font-mono text-sky-400 font-bold mt-0.5">{connectionState.bytesSent} bytes</div>
                   </div>
+
                   <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
-                    <span className="text-slate-500 font-bold uppercase text-[10px]">Total Packets</span>
-                    <div className="font-mono text-emerald-400 font-bold mt-0.5">{diag.totalPacketsReceived}</div>
-                  </div>
-                  <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
-                    <span className="text-slate-500 font-bold uppercase text-[10px]">Heartbeats</span>
-                    <div className="font-mono text-emerald-400 font-bold mt-0.5">{diag.heartbeatsCount}</div>
+                    <span className="text-slate-500 font-bold uppercase text-[10px]">MAVLink Packets</span>
+                    <div className="font-mono text-emerald-400 font-bold mt-0.5">{diag.totalPacketsReceived} pkts</div>
                   </div>
                 </div>
 
-                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-[11px] text-slate-300 space-y-1">
-                  <div className="font-bold text-slate-200">How Data Flows End-to-End:</div>
-                  <div>1. Pixhawk transmits telemetry at 57600 baud via TELEM2 port.</div>
-                  <div>2. ESP32-S3 receives UART frames on RX pin and forwards binary frames to WebSocket clients on port 8080.</div>
-                  <div>3. Browser decodes MAVLink packets and displays real telemetry without simulation.</div>
+                {/* Mixed Content & TLS Diagnostic Guidance */}
+                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-[11px] text-slate-300 space-y-2">
+                  <div className="font-bold text-slate-200 flex items-center space-x-1.5">
+                    <Network className="w-4 h-4 text-purple-400" />
+                    <span>Mixed-Content &amp; WSS Network Topology:</span>
+                  </div>
+                  <div className="space-y-1 text-slate-400">
+                    <div>1. <strong>Local HTTP:</strong> <code>http://ESP32-IP</code> ➔ <code>ws://ESP32-IP:8080</code> (Fast direct local test).</div>
+                    <div>2. <strong>HTTPS Deployed:</strong> <code>https://WEB-APP</code> ➔ <code>wss://RELAY-ENDPOINT</code> ➔ ESP32 (Production).</div>
+                    <div>3. <strong>Security Rule:</strong> Modern browsers strictly block insecure <code>ws://</code> from secure <code>https://</code> web pages. Direct <code>wss://</code> to local IP without TLS certificate fails SSL verification.</div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -360,7 +375,7 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
                   <li><strong>Check TELEM2 wiring:</strong> TX➔RX, RX➔TX, GND➔GND, 5V➔5V.</li>
                   <li><strong>Verify Baud Rate:</strong> Ensure Pixhawk parameter <code>SERIAL2_BAUD = 57</code> (57600 baud).</li>
                   <li><strong>Verify Protocol:</strong> Ensure Pixhawk parameter <code>SERIAL2_PROTOCOL = 2</code> (MAVLink2).</li>
-                  <li><strong>Verify Wi-Fi Network:</strong> Phone must be connected to the same Wi-Fi network as the ESP32.</li>
+                  <li><strong>Verify Wi-Fi Network:</strong> Phone/PC must be connected to the same Wi-Fi network as the ESP32.</li>
                 </ol>
               </div>
             </div>

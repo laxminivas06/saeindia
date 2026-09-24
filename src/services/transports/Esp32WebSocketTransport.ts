@@ -9,6 +9,7 @@ export interface Esp32WebSocketOptions {
   secureEndpoint?: string;
   protocol?: 'ws' | 'wss';
   baudRate?: number;
+  wifiSsid?: string;
 }
 
 export class Esp32WebSocketTransport implements MavlinkTransport {
@@ -28,6 +29,10 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
   private secureEndpoint: string = 'relay.example.com:8443';
   private currentProtocol: 'ws' | 'wss' = 'ws';
   private currentBaudRate: number = 57600;
+
+  // Wi-Fi State Persistence (Independent of WebSocket & Page Reload)
+  private wifiSsid: string = 'DRONE_WIFI_2.4G';
+  private wifiConnected: boolean = true;
   
   private isConnecting: boolean = false;
   private manualDisconnect: boolean = false;
@@ -52,13 +57,10 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
         const savedSecureEndpoint = localStorage.getItem('esp32_secure_endpoint');
         const savedProto = localStorage.getItem('esp32_proto');
         const savedBaud = localStorage.getItem('esp32_baud');
+        const savedSsid = localStorage.getItem('esp32_wifi_ssid');
 
         if (savedMode === 'LOCAL' || savedMode === 'SECURE') {
           this.connectionMode = savedMode;
-        } else {
-          // If page is loaded over HTTPS, default UI mode to SECURE or LOCAL based on preference
-          // but preserve explicit user setting
-          this.connectionMode = window.location.protocol === 'https:' ? 'LOCAL' : 'LOCAL';
         }
 
         if (savedHost) this.localHost = savedHost;
@@ -66,6 +68,19 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
         if (savedSecureEndpoint) this.secureEndpoint = savedSecureEndpoint;
         if (savedProto === 'ws' || savedProto === 'wss') this.currentProtocol = savedProto;
         if (savedBaud) this.currentBaudRate = parseInt(savedBaud, 10) || 57600;
+        if (savedSsid) this.wifiSsid = savedSsid;
+
+        // Check if user was connected previously before page refresh
+        const autoConnect = localStorage.getItem('esp32_autoconnect');
+        if (autoConnect === 'true') {
+          // Automatic seamless reconnection after browser reload
+          setTimeout(() => {
+            if (!this.manualDisconnect && !this.socket) {
+              console.log('[WS] Page reloaded: Auto-reconnecting to ESP32 WebSocket (Wi-Fi preserved)...');
+              this.connect();
+            }
+          }, 400);
+        }
       } catch (e) {
         // ignore
       }
@@ -100,6 +115,43 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
     return this.currentBaudRate;
   }
 
+  public getWifiSsid(): string {
+    return this.wifiSsid;
+  }
+
+  public isWifiConnected(): boolean {
+    return this.wifiConnected;
+  }
+
+  public setWifiSsid(ssid: string) {
+    this.wifiSsid = ssid.trim();
+    this.wifiConnected = true;
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('esp32_wifi_ssid', this.wifiSsid);
+      } catch (e) {
+        // ignore
+      }
+    }
+  }
+
+  /**
+   * Explicit RESET WIFI: Only clears Wi-Fi credentials when explicitly called by the user
+   */
+  public resetWifi() {
+    this.wifiSsid = '';
+    this.wifiConnected = false;
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem('esp32_wifi_ssid');
+        localStorage.setItem('esp32_autoconnect', 'false');
+      } catch (e) {
+        // ignore
+      }
+    }
+    this.disconnect();
+  }
+
   /**
    * Resolve target WebSocket URL based on connection mode
    */
@@ -108,7 +160,6 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
       return `ws://${this.localHost}:${this.localPort}`;
     } else {
       let ep = this.secureEndpoint.trim();
-      // Strip any existing protocol prefix
       ep = ep.replace(/^wss?:\/\//i, '');
       return `wss://${ep}`;
     }
@@ -121,12 +172,17 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
     secureEndpoint?: string;
     protocol?: 'ws' | 'wss';
     baudRate?: number;
+    wifiSsid?: string;
   }) {
     if (options.mode) this.connectionMode = options.mode;
     if (options.host) this.localHost = options.host.trim();
     if (options.port) this.localPort = options.port;
     if (options.secureEndpoint) this.secureEndpoint = options.secureEndpoint.trim();
     if (options.baudRate) this.currentBaudRate = options.baudRate;
+    if (options.wifiSsid) {
+      this.wifiSsid = options.wifiSsid.trim();
+      this.wifiConnected = true;
+    }
 
     // Synchronize protocol with mode unless explicitly overridden
     if (options.protocol) {
@@ -143,6 +199,7 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
         localStorage.setItem('esp32_secure_endpoint', this.secureEndpoint);
         localStorage.setItem('esp32_proto', this.currentProtocol);
         localStorage.setItem('esp32_baud', this.currentBaudRate.toString());
+        if (this.wifiSsid) localStorage.setItem('esp32_wifi_ssid', this.wifiSsid);
       } catch (e) {
         // ignore
       }
@@ -231,10 +288,10 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
     const wsUrl = this.getResolvedUrl();
     const isLocalPrivateTarget = this.isPrivateIp(this.connectionMode === 'LOCAL' ? this.localHost : this.secureEndpoint);
 
-    // Explicit Requirement 7: Output detailed structured logs
     console.log(`[WS] PAGE PROTOCOL = ${pageProtocol}`);
     console.log(`[WS] CONNECTION MODE = ${this.connectionMode}`);
     console.log(`[WS] ENDPOINT = ${wsUrl}`);
+    console.log(`[WS] WIFI SSID = ${this.wifiSsid || 'Default'}`);
 
     // Check for Mixed-Content restriction upfront on HTTPS origins
     if (isHttpsOrigin && this.connectionMode === 'LOCAL' && wsUrl.startsWith('ws://')) {
@@ -296,6 +353,15 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
           this.clearAllTimers();
           this.isConnecting = false;
           this.reconnectAttempts = 0;
+
+          // Save autoconnect state so page reload seamlessly reconnects
+          if (typeof window !== 'undefined') {
+            try {
+              localStorage.setItem('esp32_autoconnect', 'true');
+            } catch (e) {
+              // ignore
+            }
+          }
 
           const successMsg = this.connectionMode === 'SECURE'
             ? `[WS] WSS CONNECTED: Connected to secure MAVLink relay (${wsUrl}) ✓. Waiting for Pixhawk Heartbeat…`
@@ -392,7 +458,7 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
             return;
           }
 
-          // Unexpected disconnect - attempt controlled reconnect
+          // Unexpected disconnect - attempt controlled reconnect (Wi-Fi is still preserved)
           if (this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++;
             const delays = [1000, 2000, 3000, 5000, 10000];
@@ -439,8 +505,9 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
   }
 
   /**
-   * Rock-solid disconnect. Immediately closes socket, cancels reconnects,
-   * sets manualDisconnect=true, and resets state to DISCONNECTED.
+   * Explicit DISCONNECT (Browser Communication Only):
+   * Closes WebSocket cleanly, stops telemetry, does NOT erase Wi-Fi credentials,
+   * does NOT restart ESP32 Wi-Fi or AP.
    */
   public async disconnect(): Promise<void> {
     this.manualDisconnect = true;
@@ -448,18 +515,25 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
     this.isConnecting = false;
     this.clearAllTimers();
 
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('esp32_autoconnect', 'false');
+      } catch (e) {
+        // ignore
+      }
+    }
+
     this.cleanupSocket(true);
 
     this.notifyState({
       phase: 'DISCONNECTED',
-      message: 'ESP32-S3 bridge disconnected.'
+      message: 'ESP32-S3 WebSocket bridge disconnected by user. Wi-Fi remains connected on ESP32.'
     });
   }
 
   private cleanupSocket(isManual: boolean) {
     if (this.socket) {
       try {
-        // Remove listeners to prevent race-condition triggers
         this.socket.onopen = null;
         this.socket.onmessage = null;
         this.socket.onerror = null;
@@ -527,6 +601,8 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
       protocol: this.currentProtocol,
       baudRate: this.currentBaudRate,
       url: this.getResolvedUrl(),
+      wifiSsid: this.wifiSsid,
+      wifiConnected: this.wifiConnected,
       isHttpsOrigin: typeof window !== 'undefined' && window.location.protocol === 'https:',
       readyState: this.socket ? this.socket.readyState : WebSocket.CLOSED,
       isConnecting: this.isConnecting,

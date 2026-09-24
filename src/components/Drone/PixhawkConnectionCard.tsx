@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { PixhawkConnectionState, ConnectionPhase } from '../../types/mavlink';
 import { mavlinkService } from '../../services/mavlinkService';
+import { transportManager } from '../../services/transports/TransportManager';
 import {
   Usb,
   ShieldCheck,
@@ -32,7 +33,9 @@ import {
   ChevronUp,
   ExternalLink,
   Layers,
-  Network
+  Network,
+  Settings,
+  Trash2
 } from 'lucide-react';
 import { SerialDiagnosticsModal } from './SerialDiagnosticsModal';
 
@@ -53,9 +56,23 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
   const [esp32PingResult, setEsp32PingResult] = useState<{ reachable: boolean; latencyMs?: number; message?: string } | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [showEsp32Guide, setShowEsp32Guide] = useState(false);
+  const [showChangeWifiModal, setShowChangeWifiModal] = useState(false);
+  const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
+  const [showResetWifiConfirm, setShowResetWifiConfirm] = useState(false);
   const [showDevDetails, setShowDevDetails] = useState(false);
   const [selectedBaud, setSelectedBaud] = useState<number>(connectionState.baudRate || 57600);
   
+  // Wi-Fi Configuration State
+  const [wifiSsid, setWifiSsid] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('esp32_wifi_ssid') || 'DRONE_WIFI_2.4G';
+    }
+    return 'DRONE_WIFI_2.4G';
+  });
+  const [newWifiSsid, setNewWifiSsid] = useState<string>('');
+  const [newWifiPassword, setNewWifiPassword] = useState<string>('');
+  const [wifiSaveSuccess, setWifiSaveSuccess] = useState<boolean>(false);
+
   // Connection Transport Method: 'ESP32' | 'USB' | 'SIM'
   const [connectionMethod, setConnectionMethod] = useState<'ESP32' | 'USB' | 'SIM'>(() => {
     if (connectionState.connectionType === 'ESP32_WEBSOCKET') return 'ESP32';
@@ -104,6 +121,9 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
   const isSimulated = connectionState.connectionType === 'SIMULATED';
   const isEsp32Mode = connectionMethod === 'ESP32';
   const diag = connectionState.diagnostics;
+
+  // Active Wi-Fi state (Wi-Fi remains connected on ESP32 regardless of browser page reload/WebSocket state)
+  const isWifiConfigured = Boolean(wifiSsid && wifiSsid.trim().length > 0);
 
   // Resolved endpoint URL to display clearly
   const resolvedTargetUrl = esp32Mode === 'SECURE'
@@ -187,6 +207,7 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
         localStorage.setItem('esp32_secure_endpoint', esp32SecureEndpoint.trim());
         localStorage.setItem('esp32_proto', esp32Mode === 'SECURE' ? 'wss' : 'ws');
         localStorage.setItem('esp32_baud', selectedBaud.toString());
+        localStorage.setItem('esp32_wifi_ssid', wifiSsid.trim());
       }
       
       await mavlinkService.connectEsp32({
@@ -195,7 +216,8 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
         port: esp32Port,
         secureEndpoint: esp32SecureEndpoint.trim(),
         protocol: esp32Mode === 'SECURE' ? 'wss' : 'ws',
-        baudRate: selectedBaud
+        baudRate: selectedBaud,
+        wifiSsid: wifiSsid.trim()
       });
     } catch (e) {
       console.warn('ESP32 connect error:', e);
@@ -226,9 +248,31 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
     }
   };
 
-  const handleDisconnect = async () => {
+  const handleConfirmDisconnect = async () => {
+    setShowDisconnectConfirm(false);
     setIsConnecting(false);
     await mavlinkService.disconnect();
+  };
+
+  const handleSaveWifiConfig = () => {
+    if (!newWifiSsid.trim()) return;
+    const ssid = newWifiSsid.trim();
+    setWifiSsid(ssid);
+    mavlinkService.setWifiSsid(ssid);
+    setWifiSaveSuccess(true);
+    setTimeout(() => {
+      setWifiSaveSuccess(false);
+      setShowChangeWifiModal(false);
+      setNewWifiSsid('');
+      setNewWifiPassword('');
+    }, 1200);
+  };
+
+  const handleConfirmResetWifi = () => {
+    setShowResetWifiConfirm(false);
+    setShowChangeWifiModal(false);
+    setWifiSsid('');
+    mavlinkService.resetWifi();
   };
 
   const handleBaudChange = (newBaud: number) => {
@@ -441,14 +485,23 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
               </div>
 
               <div className="flex items-center space-x-2">
+                {/* Separate CHANGE WIFI button */}
+                <button
+                  onClick={() => setShowChangeWifiModal(true)}
+                  className="text-[11px] px-2.5 py-1 bg-purple-900/60 hover:bg-purple-800 text-purple-200 rounded-lg border border-purple-500/40 flex items-center space-x-1 cursor-pointer transition font-bold"
+                >
+                  <Wifi className="w-3.5 h-3.5 text-purple-300" />
+                  <span>CHANGE WIFI</span>
+                </button>
+
                 {esp32Mode === 'LOCAL' && (
                   <button
                     onClick={handleCheckEsp32}
                     disabled={isCheckingEsp32}
-                    className="text-[11px] px-2.5 py-1 bg-purple-900/60 hover:bg-purple-800 text-purple-200 rounded-lg border border-purple-500/40 flex items-center space-x-1 cursor-pointer transition"
+                    className="text-[11px] px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 flex items-center space-x-1 cursor-pointer transition"
                   >
                     {isCheckingEsp32 ? <Loader2 className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3" />}
-                    <span>Check ESP32 Ping</span>
+                    <span>Check Ping</span>
                   </button>
                 )}
 
@@ -457,7 +510,7 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                   className="text-[11px] text-purple-300 hover:text-purple-100 flex items-center space-x-1 underline cursor-pointer"
                 >
                   <HelpCircle className="w-3.5 h-3.5" />
-                  <span>Architecture &amp; Wiring Guide</span>
+                  <span>Guide</span>
                 </button>
               </div>
             </div>
@@ -479,7 +532,7 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
 
             {/* Input Controls Bar for LOCAL vs SECURE Mode */}
             {esp32Mode === 'LOCAL' ? (
-              /* LOCAL MODE INPUTS: ws:// + IP + Port + Baud + Connect */
+              /* LOCAL MODE INPUTS: ws:// + IP + Port + Baud + Connect / Disconnect */
               <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 text-xs items-center">
                 
                 {/* Protocol Static Badge */}
@@ -527,20 +580,20 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                   </select>
                 </div>
 
-                {/* Action Button */}
+                {/* Action Button: Connect / Disconnect with Confirmation */}
                 <div className="sm:col-span-2">
                   {isConnecting ? (
                     <button
                       disabled
-                      className="w-full py-2 bg-purple-800 text-purple-200 rounded-lg text-xs font-black uppercase tracking-wide flex items-center justify-center space-x-1.5 opacity-80 cursor-not-allowed"
+                      className="w-full py-2.5 bg-purple-800 text-purple-200 rounded-lg text-xs font-black uppercase tracking-wide flex items-center justify-center space-x-1.5 opacity-80 cursor-not-allowed"
                     >
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
                       <span>CONNECTING...</span>
                     </button>
                   ) : isEsp32Active ? (
                     <button
-                      onClick={handleDisconnect}
-                      className="w-full py-2 bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white rounded-lg text-xs font-black uppercase tracking-wide transition flex items-center justify-center space-x-1.5 shadow-lg shadow-rose-600/30 cursor-pointer"
+                      onClick={() => setShowDisconnectConfirm(true)}
+                      className="w-full py-2.5 bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white rounded-lg text-xs font-black uppercase tracking-wide transition flex items-center justify-center space-x-1.5 shadow-lg shadow-rose-600/30 cursor-pointer"
                     >
                       <PowerOff className="w-3.5 h-3.5" />
                       <span>DISCONNECT</span>
@@ -548,7 +601,7 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                   ) : (
                     <button
                       onClick={handleConnectEsp32}
-                      className="w-full py-2 bg-purple-600 hover:bg-purple-500 active:bg-purple-700 text-white rounded-lg text-xs font-black uppercase tracking-wide transition flex items-center justify-center space-x-1.5 shadow-lg shadow-purple-600/30 cursor-pointer"
+                      className="w-full py-2.5 bg-purple-600 hover:bg-purple-500 active:bg-purple-700 text-white rounded-lg text-xs font-black uppercase tracking-wide transition flex items-center justify-center space-x-1.5 shadow-lg shadow-purple-600/30 cursor-pointer"
                     >
                       <Wifi className="w-3.5 h-3.5" />
                       <span>CONNECT</span>
@@ -557,7 +610,7 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                 </div>
               </div>
             ) : (
-              /* SECURE MODE INPUTS: wss:// + Secure Relay Endpoint + Baud + Connect */
+              /* SECURE MODE INPUTS: wss:// + Secure Relay Endpoint + Baud + Connect / Disconnect */
               <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 text-xs items-center">
                 
                 {/* Protocol Static Badge */}
@@ -601,15 +654,15 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                   {isConnecting ? (
                     <button
                       disabled
-                      className="w-full py-2 bg-emerald-800 text-emerald-200 rounded-lg text-xs font-black uppercase tracking-wide flex items-center justify-center space-x-1.5 opacity-80 cursor-not-allowed"
+                      className="w-full py-2.5 bg-emerald-800 text-emerald-200 rounded-lg text-xs font-black uppercase tracking-wide flex items-center justify-center space-x-1.5 opacity-80 cursor-not-allowed"
                     >
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
                       <span>CONNECTING...</span>
                     </button>
                   ) : isEsp32Active ? (
                     <button
-                      onClick={handleDisconnect}
-                      className="w-full py-2 bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white rounded-lg text-xs font-black uppercase tracking-wide transition flex items-center justify-center space-x-1.5 shadow-lg shadow-rose-600/30 cursor-pointer"
+                      onClick={() => setShowDisconnectConfirm(true)}
+                      className="w-full py-2.5 bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white rounded-lg text-xs font-black uppercase tracking-wide transition flex items-center justify-center space-x-1.5 shadow-lg shadow-rose-600/30 cursor-pointer"
                     >
                       <PowerOff className="w-3.5 h-3.5" />
                       <span>DISCONNECT</span>
@@ -617,7 +670,7 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                   ) : (
                     <button
                       onClick={handleConnectEsp32}
-                      className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white rounded-lg text-xs font-black uppercase tracking-wide transition flex items-center justify-center space-x-1.5 shadow-lg shadow-emerald-600/30 cursor-pointer"
+                      className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white rounded-lg text-xs font-black uppercase tracking-wide transition flex items-center justify-center space-x-1.5 shadow-lg shadow-emerald-600/30 cursor-pointer"
                     >
                       <Lock className="w-3.5 h-3.5" />
                       <span>CONNECT WSS</span>
@@ -627,78 +680,138 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
               </div>
             )}
 
-            {/* Resolved Endpoint Banner */}
-            <div className="px-3 py-1.5 bg-slate-950/90 rounded-lg border border-slate-800 flex flex-wrap items-center justify-between text-[11px] gap-1">
-              <div className="flex items-center space-x-1.5">
-                <span className="text-slate-400 font-bold uppercase text-[10px]">Active Target:</span>
-                <span className="text-purple-300 font-mono font-bold">{resolvedTargetUrl}</span>
-              </div>
-              <div className="text-[10px] text-slate-400">
-                Mode: <strong className={esp32Mode === 'SECURE' ? 'text-emerald-400' : 'text-purple-400'}>{esp32Mode}</strong> | Origin: <strong className="text-sky-300">{pageProtocol}</strong>
-              </div>
-            </div>
-
-            {/* Live Connection Diagnostics Matrix */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2 pt-1 text-[10px]">
-              
-              {/* 1. Page Protocol & Mode */}
-              <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800">
-                <div className="text-slate-400 uppercase font-bold">Origin / Mode</div>
-                <div className="font-bold text-slate-200 truncate mt-0.5">
-                  <span className={isHttpsOrigin ? 'text-sky-400' : 'text-emerald-400'}>{pageProtocol}</span>
-                  <span className="text-slate-500"> / </span>
-                  <span className={esp32Mode === 'SECURE' ? 'text-emerald-400' : 'text-purple-400'}>{esp32Mode}</span>
-                </div>
+            {/* ========================================================================= */}
+            {/* SECTION 9: RESPONSIVE CONNECTION STATUS MATRIX & PERSISTENCE SUMMARY      */}
+            {/* ========================================================================= */}
+            <div className="bg-slate-950/90 rounded-xl p-3 border border-slate-800 space-y-2.5">
+              <div className="flex items-center justify-between text-[11px] pb-1.5 border-b border-slate-800">
+                <span className="font-black uppercase text-slate-300 flex items-center space-x-1.5">
+                  <Activity className="w-3.5 h-3.5 text-purple-400" />
+                  <span>CONNECTION STATUS (PERSISTENT &amp; INDEPENDENT LAYERS)</span>
+                </span>
+                <span className="text-[10px] text-slate-400 font-mono">
+                  {pageProtocol} Origin
+                </span>
               </div>
 
-              {/* 2. WebSocket State */}
-              <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800">
-                <div className="text-slate-400 uppercase font-bold">WebSocket Link</div>
-                <div className={`font-bold mt-0.5 ${
-                  isWebSocketOpen ? 'text-emerald-400' : isConnecting ? 'text-amber-400' : 'text-slate-400'
-                }`}>
-                  {isWebSocketOpen ? 'CONNECTED ✓' : isConnecting ? 'CONNECTING...' : 'DISCONNECTED'}
+              {/* Status Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 text-[11px]">
+                
+                {/* 1. Wi-Fi Layer State (Persistent across reload) */}
+                <div className="bg-slate-900/90 p-2 rounded-lg border border-slate-800 flex items-center justify-between">
+                  <div>
+                    <div className="text-[10px] text-slate-400 uppercase font-bold">Wi-Fi Network</div>
+                    <div className="text-purple-300 font-bold truncate mt-0.5" title={wifiSsid || 'Default'}>
+                      {wifiSsid || 'DRONE_WIFI_2.4G'}
+                    </div>
+                  </div>
+                  <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase ${
+                    isWifiConfigured
+                      ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/40'
+                      : 'bg-slate-800 text-slate-400'
+                  }`}>
+                    {isWifiConfigured ? 'CONNECTED ✓' : 'NOT CONFIGURED'}
+                  </span>
                 </div>
+
+                {/* 2. ESP32 Host Endpoint */}
+                <div className="bg-slate-900/90 p-2 rounded-lg border border-slate-800 flex items-center justify-between">
+                  <div>
+                    <div className="text-[10px] text-slate-400 uppercase font-bold">ESP32 Target Endpoint</div>
+                    <div className="text-slate-200 font-mono text-[10px] truncate mt-0.5" title={resolvedTargetUrl}>
+                      {resolvedTargetUrl}
+                    </div>
+                  </div>
+                  <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-slate-800 text-slate-300">
+                    {esp32Mode}
+                  </span>
+                </div>
+
+                {/* 3. WebSocket Link Layer */}
+                <div className="bg-slate-900/90 p-2 rounded-lg border border-slate-800 flex items-center justify-between">
+                  <div>
+                    <div className="text-[10px] text-slate-400 uppercase font-bold">WebSocket Link</div>
+                    <div className={`font-bold mt-0.5 ${
+                      isWebSocketOpen ? 'text-emerald-400' : isConnecting ? 'text-amber-400' : 'text-slate-400'
+                    }`}>
+                      {isWebSocketOpen ? 'CONNECTED ✓' : isConnecting ? 'RECONNECTING...' : 'DISCONNECTED'}
+                    </div>
+                  </div>
+                  <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase ${
+                    isWebSocketOpen
+                      ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/40'
+                      : isConnecting
+                      ? 'bg-amber-950 text-amber-300 border border-amber-500/40 animate-pulse'
+                      : 'bg-rose-950/60 text-rose-300 border border-rose-500/30'
+                  }`}>
+                    {isWebSocketOpen ? 'OPEN' : isConnecting ? 'CONNECTING' : 'CLOSED'}
+                  </span>
+                </div>
+
+                {/* 4. MAVLink Autopilot Stream */}
+                <div className="bg-slate-900/90 p-2 rounded-lg border border-slate-800 flex items-center justify-between">
+                  <div>
+                    <div className="text-[10px] text-slate-400 uppercase font-bold">MAVLink Telemetry</div>
+                    <div className="font-bold text-slate-200 mt-0.5">
+                      SysID: <span className="text-emerald-300">{connectionState.systemId || 1}</span> | Comp: <span className="text-emerald-300">{connectionState.componentId || 1}</span>
+                    </div>
+                  </div>
+                  <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase ${
+                    isConnected
+                      ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/40'
+                      : isWaitingMavlink
+                      ? 'bg-amber-950 text-amber-300 border border-amber-500/40 animate-pulse'
+                      : 'bg-slate-800 text-slate-400'
+                  }`}>
+                    {isConnected ? 'CONNECTED ✓' : isWaitingMavlink ? 'WAITING ⟳' : 'DISCONNECTED'}
+                  </span>
+                </div>
+
+                {/* 5. Heartbeat Rate */}
+                <div className="bg-slate-900/90 p-2 rounded-lg border border-slate-800 flex items-center justify-between">
+                  <div>
+                    <div className="text-[10px] text-slate-400 uppercase font-bold">Heartbeat Stream</div>
+                    <div className={`font-bold mt-0.5 ${
+                      isMavlinkHeartbeatReceived ? 'text-emerald-400' : 'text-amber-400'
+                    }`}>
+                      {isMavlinkHeartbeatReceived ? `RECEIVED (${connectionState.heartbeatHz || 1.0} Hz)` : 'NOT RECEIVED'}
+                    </div>
+                  </div>
+                  <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase ${
+                    isMavlinkHeartbeatReceived
+                      ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/40'
+                      : 'bg-amber-950 text-amber-300 border border-amber-500/40'
+                  }`}>
+                    {isMavlinkHeartbeatReceived ? 'ACTIVE' : 'IDLE'}
+                  </span>
+                </div>
+
+                {/* 6. Cumulative RX / TX */}
+                <div className="bg-slate-900/90 p-2 rounded-lg border border-slate-800 flex items-center justify-between">
+                  <div>
+                    <div className="text-[10px] text-slate-400 uppercase font-bold">Cumulative RX / TX</div>
+                    <div className="font-bold text-slate-200 mt-0.5">
+                      <span className="text-emerald-400">{formatBytes(connectionState.bytesReceived)}</span>
+                      <span className="text-slate-500"> / </span>
+                      <span className="text-sky-400">{formatBytes(connectionState.bytesSent)}</span>
+                    </div>
+                  </div>
+                  <span className="text-[10px] text-slate-400 font-mono">
+                    {diag.totalPacketsReceived} pkts
+                  </span>
+                </div>
+
               </div>
 
-              {/* 3. MAVLink State */}
-              <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800">
-                <div className="text-slate-400 uppercase font-bold">MAVLink FC Link</div>
-                <div className={`font-bold mt-0.5 ${
-                  isConnected ? 'text-emerald-400' : isWaitingMavlink ? 'text-amber-400' : 'text-slate-400'
-                }`}>
-                  {isConnected ? 'CONNECTED ✓' : isWaitingMavlink ? 'WAITING ⟳' : 'DISCONNECTED'}
-                </div>
-              </div>
-
-              {/* 4. Heartbeat State */}
-              <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800">
-                <div className="text-slate-400 uppercase font-bold">Heartbeat Stream</div>
-                <div className={`font-bold mt-0.5 ${
-                  isMavlinkHeartbeatReceived ? 'text-emerald-400' : 'text-amber-400'
-                }`}>
-                  {isMavlinkHeartbeatReceived 
-                    ? `RECEIVED (${connectionState.heartbeatHz || 1.0} Hz)` 
-                    : 'NOT RECEIVED'}
-                </div>
-              </div>
-
-              {/* 5. Cumulative RX / TX Bytes Counter */}
-              <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800">
-                <div className="text-slate-400 uppercase font-bold">RX / TX Cumulative</div>
-                <div className="font-bold text-slate-200 mt-0.5 truncate">
-                  <span className="text-emerald-400">{formatBytes(connectionState.bytesReceived)}</span>
-                  <span className="text-slate-500"> / </span>
-                  <span className="text-sky-400">{formatBytes(connectionState.bytesSent)}</span>
-                </div>
-              </div>
-
-              {/* 6. Last Packet & Msg */}
-              <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800">
-                <div className="text-slate-400 uppercase font-bold">Last Packet</div>
-                <div className="font-bold text-slate-300 truncate mt-0.5" title={diag.lastMavlinkMessageName || 'None'}>
-                  {diag.lastMavlinkMessageName ? `${diag.lastMavlinkMessageName}` : formatPacketAge()}
-                </div>
+              {/* Bottom Persistence Note */}
+              <div className="text-[10px] text-slate-400 flex items-center justify-between pt-1 border-t border-slate-800/80">
+                <span>ℹ️ Browser refresh only reloads UI. Wi-Fi connection on ESP32 is persistent.</span>
+                <button
+                  onClick={() => setShowDevDetails(!showDevDetails)}
+                  className="text-purple-300 hover:text-purple-100 underline cursor-pointer"
+                >
+                  {showDevDetails ? 'Hide Diagnostics' : 'Show Diagnostics'}
+                </button>
               </div>
             </div>
 
@@ -735,32 +848,23 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
             ) : null}
 
             {/* Collapsible Developer Diagnostics Bar */}
-            <div className="pt-1">
-              <button
-                onClick={() => setShowDevDetails(!showDevDetails)}
-                className="text-[11px] text-purple-300 hover:text-purple-100 flex items-center space-x-1 cursor-pointer"
-              >
-                {showDevDetails ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                <span>{showDevDetails ? 'Hide Developer Diagnostics' : 'Show Detailed Network Diagnostics'}</span>
-              </button>
-
-              {showDevDetails && (
-                <div className="mt-2 p-3 bg-slate-950 rounded-xl border border-slate-800 text-[11px] space-y-2 text-slate-300">
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    <div><strong className="text-slate-400">Page Origin:</strong> {window.location.origin}</div>
-                    <div><strong className="text-slate-400">Page Protocol:</strong> {pageProtocol}</div>
-                    <div><strong className="text-slate-400">Connection Mode:</strong> {esp32Mode}</div>
-                    <div><strong className="text-slate-400">Target URL:</strong> {resolvedTargetUrl}</div>
-                    <div><strong className="text-slate-400">WS Link State:</strong> {isWebSocketOpen ? 'OPEN (ReadyState 1)' : 'CLOSED (ReadyState 3)'}</div>
-                    <div><strong className="text-slate-400">SysID / CompID:</strong> {connectionState.systemId || '—'} / {connectionState.componentId || '—'}</div>
-                    <div><strong className="text-slate-400">RX Exact:</strong> {connectionState.bytesReceived} bytes</div>
-                    <div><strong className="text-slate-400">TX Exact:</strong> {connectionState.bytesSent} bytes</div>
-                    <div><strong className="text-slate-400">Last Msg:</strong> {diag.lastMavlinkMessageName ? `${diag.lastMavlinkMessageName} (#${diag.lastMavlinkMessageId})` : '—'}</div>
-                    <div><strong className="text-slate-400">Phase Message:</strong> <span className="text-purple-300">{connectionState.phaseMessage}</span></div>
-                  </div>
+            {showDevDetails && (
+              <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-[11px] space-y-2 text-slate-300">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <div><strong className="text-slate-400">Page Origin:</strong> {window.location.origin}</div>
+                  <div><strong className="text-slate-400">Page Protocol:</strong> {pageProtocol}</div>
+                  <div><strong className="text-slate-400">Connection Mode:</strong> {esp32Mode}</div>
+                  <div><strong className="text-slate-400">Target URL:</strong> {resolvedTargetUrl}</div>
+                  <div><strong className="text-slate-400">Wi-Fi SSID:</strong> {wifiSsid || 'None'}</div>
+                  <div><strong className="text-slate-400">WS Link State:</strong> {isWebSocketOpen ? 'OPEN (ReadyState 1)' : 'CLOSED (ReadyState 3)'}</div>
+                  <div><strong className="text-slate-400">SysID / CompID:</strong> {connectionState.systemId || '—'} / {connectionState.componentId || '—'}</div>
+                  <div><strong className="text-slate-400">RX Exact:</strong> {connectionState.bytesReceived} bytes</div>
+                  <div><strong className="text-slate-400">TX Exact:</strong> {connectionState.bytesSent} bytes</div>
+                  <div><strong className="text-slate-400">Last Msg:</strong> {diag.lastMavlinkMessageName ? `${diag.lastMavlinkMessageName} (#${diag.lastMavlinkMessageId})` : '—'}</div>
+                  <div className="col-span-2"><strong className="text-slate-400">Phase Message:</strong> <span className="text-purple-300">{connectionState.phaseMessage}</span></div>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -923,7 +1027,7 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                   </button>
                 ) : isUsbActive ? (
                   <button
-                    onClick={handleDisconnect}
+                    onClick={() => setShowDisconnectConfirm(true)}
                     className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white rounded-lg text-xs font-black uppercase tracking-wide transition flex items-center justify-center space-x-1.5 shadow-lg shadow-rose-600/30 cursor-pointer"
                   >
                     <PowerOff className="w-3.5 h-3.5" />
@@ -1055,7 +1159,215 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
         ) : null}
       </div>
 
-      {/* ESP32-S3 PROVISIONING, WIRING & PRODUCTION WSS ARCHITECTURE MODAL */}
+      {/* ========================================================================= */}
+      {/* MODAL 1: EXPLICIT DISCONNECT CONFIRMATION MODAL                           */}
+      {/* ========================================================================= */}
+      {showDisconnectConfirm && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 font-mono select-none">
+          <div className="bg-slate-900 border-2 border-rose-500/60 rounded-2xl max-w-md w-full p-4 sm:p-6 space-y-4 text-slate-200 shadow-2xl">
+            <div className="flex items-start space-x-3">
+              <div className="p-2.5 bg-rose-950/80 border border-rose-500/50 rounded-xl text-rose-400 shrink-0">
+                <PowerOff className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-white uppercase tracking-wide">
+                  Disconnect from ESP32?
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  This will close the Ground Station MAVLink WebSocket session.
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-[11px] text-slate-300 space-y-1.5">
+              <div className="flex items-center space-x-1.5 text-emerald-400 font-bold">
+                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                <span>ESP32 Wi-Fi will REMAIN CONNECTED</span>
+              </div>
+              <p className="text-slate-400 text-[10px] leading-relaxed">
+                Disconnecting from the browser does NOT erase Wi-Fi settings or restart the ESP32. You can reconnect at any time by pressing <strong>CONNECT</strong>.
+              </p>
+            </div>
+
+            <div className="flex items-center space-x-2 pt-2">
+              <button
+                onClick={() => setShowDisconnectConfirm(false)}
+                className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition cursor-pointer"
+              >
+                CANCEL
+              </button>
+              <button
+                onClick={handleConfirmDisconnect}
+                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-black text-xs rounded-xl transition flex items-center justify-center space-x-1.5 shadow-lg shadow-rose-600/30 cursor-pointer"
+              >
+                <PowerOff className="w-4 h-4" />
+                <span>DISCONNECT</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL 2: CHANGE WIFI & RESET WIFI CONFIGURATION MODAL                     */}
+      {/* ========================================================================= */}
+      {showChangeWifiModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-5 font-mono select-none">
+          <div className="bg-slate-900 border-2 border-purple-500/60 rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-4 sm:p-6 shadow-2xl space-y-4">
+            
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center space-x-2.5">
+                <div className="p-2 bg-purple-950 rounded-xl border border-purple-500/50 text-purple-400">
+                  <Wifi className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-black text-sm sm:text-base text-white uppercase tracking-wider">
+                    Wi-Fi Network Configuration
+                  </h3>
+                  <p className="text-xs text-purple-300">Configure ESP32 Wi-Fi Association</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowChangeWifiModal(false)}
+                className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs transition cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Current Wi-Fi Status Banner */}
+            <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs space-y-1">
+              <div className="text-slate-400 font-bold uppercase text-[10px]">Current Configured Network:</div>
+              <div className="font-mono text-emerald-400 font-bold flex items-center space-x-1.5">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>{wifiSsid || 'No Wi-Fi Configured'}</span>
+              </div>
+            </div>
+
+            {wifiSaveSuccess && (
+              <div className="p-2.5 bg-emerald-950/80 border border-emerald-500/60 rounded-xl text-emerald-300 text-xs flex items-center space-x-1.5">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>Wi-Fi SSID updated &amp; saved successfully ✓</span>
+              </div>
+            )}
+
+            {/* Change SSID Form */}
+            <div className="space-y-3 pt-1">
+              <div className="text-xs font-bold uppercase text-slate-300">
+                Configure New Wi-Fi Network:
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[10px] text-slate-400 font-bold uppercase">Wi-Fi SSID (2.4 GHz):</label>
+                <input
+                  type="text"
+                  value={newWifiSsid}
+                  onChange={(e) => setNewWifiSsid(e.target.value)}
+                  placeholder="e.g. Home_Network_2.4G"
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-purple-500"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[10px] text-slate-400 font-bold uppercase">Password (Optional / Open):</label>
+                <input
+                  type="password"
+                  value={newWifiPassword}
+                  onChange={(e) => setNewWifiPassword(e.target.value)}
+                  placeholder="Wi-Fi Password"
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-purple-500"
+                />
+              </div>
+
+              <div className="p-3 bg-purple-950/30 border border-purple-500/30 rounded-xl text-[11px] text-slate-300 space-y-1">
+                <strong className="text-purple-300">How to provision ESP32 via Setup AP:</strong>
+                <div>1. Power on ESP32-S3 and connect phone to <strong className="text-purple-300">DRONE_ESP</strong> AP.</div>
+                <div>2. Open <strong className="text-emerald-400">http://192.168.4.1</strong> in browser to scan &amp; save Wi-Fi.</div>
+                <div>3. Reconnect phone to the same Wi-Fi and tap CONNECT.</div>
+              </div>
+
+              <div className="flex items-center space-x-2 pt-2">
+                <button
+                  onClick={handleSaveWifiConfig}
+                  disabled={!newWifiSsid.trim()}
+                  className={`flex-1 py-2.5 rounded-xl font-bold text-xs transition flex items-center justify-center space-x-1.5 ${
+                    newWifiSsid.trim()
+                      ? 'bg-purple-600 hover:bg-purple-500 text-white shadow-lg shadow-purple-600/30 cursor-pointer'
+                      : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                  }`}
+                >
+                  <Check className="w-4 h-4" />
+                  <span>SAVE &amp; UPDATE WIFI</span>
+                </button>
+              </div>
+
+              {/* Explicit RESET WIFI action */}
+              <div className="pt-3 border-t border-slate-800 flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-bold text-rose-400 uppercase">Erase Wi-Fi Configuration</div>
+                  <p className="text-[10px] text-slate-500">Resets ESP32 back to factory DRONE_ESP Access Point mode.</p>
+                </div>
+                <button
+                  onClick={() => setShowResetWifiConfirm(true)}
+                  className="px-3 py-1.5 bg-rose-950/70 hover:bg-rose-900 border border-rose-500/50 text-rose-300 font-bold rounded-lg text-[11px] transition flex items-center space-x-1 cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>RESET WIFI</span>
+                </button>
+              </div>
+
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL 3: RESET WIFI CONFIRMATION MODAL                                    */}
+      {/* ========================================================================= */}
+      {showResetWifiConfirm && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 font-mono select-none">
+          <div className="bg-slate-900 border-2 border-rose-500/80 rounded-2xl max-w-md w-full p-4 sm:p-6 space-y-4 text-slate-200 shadow-2xl">
+            <div className="flex items-start space-x-3">
+              <div className="p-2.5 bg-rose-950 border border-rose-500 rounded-xl text-rose-400 shrink-0">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-white uppercase tracking-wide">
+                  Erase &amp; Reset Wi-Fi?
+                </h3>
+                <p className="text-xs text-rose-300 mt-1">
+                  This will erase the saved Wi-Fi SSID and disconnect from the network.
+                </p>
+              </div>
+            </div>
+
+            <p className="text-[11px] text-slate-300 leading-relaxed bg-slate-950 p-3 rounded-xl border border-slate-800">
+              Only perform this if you intend to re-provision the ESP32 using the <strong className="text-purple-300">DRONE_ESP</strong> Access Point (http://192.168.4.1).
+            </p>
+
+            <div className="flex items-center space-x-2 pt-2">
+              <button
+                onClick={() => setShowResetWifiConfirm(false)}
+                className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition cursor-pointer"
+              >
+                CANCEL
+              </button>
+              <button
+                onClick={handleConfirmResetWifi}
+                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-black text-xs rounded-xl transition flex items-center justify-center space-x-1.5 shadow-lg shadow-rose-600/30 cursor-pointer"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>CONFIRM RESET</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL 4: ESP32-S3 PROVISIONING, WIRING & PRODUCTION WSS ARCHITECTURE MODAL */}
+      {/* ========================================================================= */}
       {showEsp32Guide && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-5 font-mono">
           <div className="bg-slate-900 border-2 border-purple-500/60 rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto p-4 sm:p-6 shadow-2xl space-y-4">

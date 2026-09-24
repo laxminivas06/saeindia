@@ -161,6 +161,8 @@ export interface PixhawkConnectionState {
   systemId?: number;
   componentId?: number;
   errorMessage?: string;
+  wifiSsid?: string;
+  wifiState?: 'CONNECTED' | 'DISCONNECTED' | 'CONFIGURING';
   diagnostics: UsbDeviceDiagnostics;
 }
 
