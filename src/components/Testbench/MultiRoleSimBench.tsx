@@ -63,7 +63,7 @@ export const MultiRoleSimBench: React.FC<MultiRoleSimBenchProps> = ({
   const scenarioSteps = [
     { num: '1-3', label: 'Set Home Point & Lock GPS', done: homePoint.isSet },
     { num: '4-7', label: 'Validate Pre-flight & START MISSION', done: missionState !== 'IDLE' && missionState !== 'HOME_SET' },
-    { num: '8-10', label: 'Takeoff (20m) & Search Grid', done: telemetry.altitude >= 18 || missionState === 'SEARCHING' || missionState === 'QR_DETECTED' || missionState === 'QR_SCANNING' || missionState === 'QR_DECODED' || missionState === 'SEND_TO_RUNNER' || missionState === 'WAIT_FOR_RUNNER_ACK' || missionState === 'RUNNER_CONFIRMED' || missionState === 'RTL' || missionState === 'RETURNING_HOME' || missionState === 'LANDING' || missionState === 'MISSION_COMPLETE' },
+    { num: '8-10', label: 'Autonomous Climb & Search Grid', done: telemetry.altitude >= 5 || missionState === 'CLIMBING_TO_ALTITUDE' || missionState === 'ALTITUDE_STABILIZING' || missionState === 'SEARCHING' || missionState === 'QR_DETECTED' || missionState === 'QR_SCANNING' || missionState === 'QR_DECODED' || missionState === 'SEND_TO_RUNNER' || missionState === 'WAIT_FOR_RUNNER_ACK' || missionState === 'RUNNER_CONFIRMED' || missionState === 'RTL' || missionState === 'RETURNING_HOME' || missionState === 'LANDING' || missionState === 'MISSION_COMPLETE' },
     { num: '11-13', label: 'Airborne Vision Locks 2-Digit QR (e.g. 27)', done: !!decodedQR },
     { num: '14-16', label: 'Direct Wireless to Runner & Auto-ACK', done: runnerAckReceived },
     { num: '17-21', label: 'Airborne Hold → Pixhawk RTL → Land at Home', done: missionState === 'RTL' || missionState === 'RETURNING_HOME' || missionState === 'LANDING' || missionState === 'MISSION_COMPLETE' },
@@ -103,7 +103,7 @@ export const MultiRoleSimBench: React.FC<MultiRoleSimBenchProps> = ({
               </button>
             )}
 
-            {(missionState === 'SEARCHING' || missionState === 'TAKEOFF') && (
+            {(missionState === 'SEARCHING' || missionState === 'TAKEOFF' || missionState === 'CLIMBING_TO_ALTITUDE' || missionState === 'ALTITUDE_STABILIZING') && (
               <button
                 onClick={() => visionService.triggerSimulatedDetection('27')}
                 className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold transition flex items-center space-x-1 animate-pulse"

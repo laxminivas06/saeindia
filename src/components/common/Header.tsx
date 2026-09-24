@@ -18,7 +18,8 @@ import {
   History,
   Smartphone,
   Info,
-  X
+  X,
+  Wifi
 } from 'lucide-react';
 import { audioService } from '../../services/audioService';
 import { ThemeController } from './ThemeController';
@@ -128,6 +129,20 @@ export const Header: React.FC<HeaderProps> = ({
           <Radio className="w-3 h-3" />
           <span>MAVLink: {pixhawkState.isConnected ? 'LOCKED ✓' : 'DISCONNECTED'}</span>
         </div>
+
+        {/* ESP32 WebSocket Bridge Status */}
+        {pixhawkState.connectionType === 'ESP32_WEBSOCKET' && (
+          <div className={`flex items-center space-x-1.5 px-2 py-1 rounded border ${
+            pixhawkState.isUsbConnected
+              ? 'bg-purple-950/40 border-purple-500/30 text-purple-300'
+              : pixhawkState.esp32LinkState === 'CONNECTING' || pixhawkState.esp32LinkState === 'RECONNECTING'
+              ? 'bg-amber-950/40 border-amber-500/30 text-amber-300 animate-pulse'
+              : 'bg-slate-800 border-slate-700 text-slate-400'
+          }`}>
+            <Wifi className="w-3 h-3 text-purple-400" />
+            <span>ESP32: {pixhawkState.isUsbConnected ? 'CONNECTED ✓' : pixhawkState.esp32LinkState === 'CONNECTING' ? 'CONNECTING' : pixhawkState.esp32LinkState === 'RECONNECTING' ? 'RECONNECTING' : 'DISCONNECTED'}</span>
+          </div>
+        )}
 
         {/* GPS */}
         <div className={`flex items-center space-x-1.5 px-2 py-1 rounded border ${

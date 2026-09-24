@@ -60,10 +60,25 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
           glow: 'animate-pulse'
         };
       case 'TAKEOFF':
+      case 'CLIMBING_TO_ALTITUDE':
         return {
-          label: 'TAKEOFF & CLIMBING',
+          label: 'TAKEOFF & CLIMBING AUTOMATICALLY',
           color: 'bg-indigo-950/60 text-indigo-300 border-indigo-500/50',
           icon: PlaneTakeoff,
+          glow: 'animate-pulse'
+        };
+      case 'ALTITUDE_STABILIZING':
+        return {
+          label: 'ALTITUDE STABILIZING (HOLDING 2S)',
+          color: 'bg-cyan-950/60 text-cyan-300 border-cyan-500/50',
+          icon: Compass,
+          glow: 'animate-pulse'
+        };
+      case 'ALTITUDE_UPDATING':
+        return {
+          label: 'ADJUSTING TARGET ALTITUDE',
+          color: 'bg-amber-950/60 text-amber-300 border-amber-500/50',
+          icon: Compass,
           glow: 'animate-pulse'
         };
       case 'SEARCHING':

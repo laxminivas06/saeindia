@@ -105,8 +105,8 @@ class UsbHostService {
     return await transportManager.connectEsp32(options);
   }
 
-  public async checkEsp32Http(host?: string): Promise<{ reachable: boolean; latencyMs?: number; message?: string }> {
-    return await transportManager.getEsp32Transport().checkEsp32Http(host);
+  public async checkEsp32Http(host?: string, port?: number): Promise<{ reachable: boolean; latencyMs?: number; message?: string }> {
+    return await transportManager.getEsp32Transport().checkEsp32Http(host, port);
   }
 
   public async requestUsbPermission(): Promise<boolean> {

@@ -14,6 +14,8 @@ import { LiveVideoFeed } from './LiveVideoFeed';
 import { ConnectionStatusDeck } from '../common/ConnectionStatusDeck';
 import { PixhawkConnectionCard } from '../Drone/PixhawkConnectionCard';
 import { missionEngine } from '../../services/missionEngine';
+import { AutonomousMissionStatusBar } from '../Mission/AutonomousMissionStatusBar';
+import { AutonomousMissionConfigModal } from '../Mission/AutonomousMissionConfigModal';
 import {
   Play,
   ShieldAlert,
@@ -24,7 +26,9 @@ import {
   Cpu,
   ChevronDown,
   ChevronUp,
-  Clock
+  Clock,
+  Settings,
+  MapPin
 } from 'lucide-react';
 
 interface GroundStationDashboardProps {
@@ -62,6 +66,10 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
   const [isDisarming, setIsDisarming] = useState(false);
   const [armFeedback, setArmFeedback] = useState<string | null>(null);
   const [showHardware, setShowHardware] = useState(false);
+  const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
+
+  const missionValidation = missionEngine.validateMission();
+  const missionConfig = missionEngine.getMissionConfig();
 
   const configuredSecs = missionEngine.getMissionDurationSeconds();
   const [selectedDuration, setSelectedDuration] = useState<number>(configuredSecs);
@@ -160,6 +168,17 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
       <PixhawkConnectionCard connectionState={pixhawkState} />
 
       {/* ============================================================ */}
+      {/* 2.5 RESPONSIVE AUTONOMOUS MISSION STATUS BAR (Requirement 7) */}
+      {/* ============================================================ */}
+      <AutonomousMissionStatusBar
+        telemetry={telemetry}
+        missionState={missionState}
+        pixhawkState={pixhawkState}
+        onOpenConfig={() => setIsConfigModalOpen(true)}
+        isAuthorizedOperator={true}
+      />
+
+      {/* ============================================================ */}
       {/* 3. LIVE VIDEO + MAP (2-column desktop, stacked mobile)       */}
       {/* ============================================================ */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -214,6 +233,68 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
         {/* Left: Mission Controls */}
         <div className="lg:col-span-6 space-y-4">
+          {/* ============================================================ */}
+          {/* AUTONOMOUS MISSION CONFIGURATION QUICK CARD (Prompt 1 Specs) */}
+          {/* ============================================================ */}
+          <div className="bg-slate-900/90 p-3.5 sm:p-4 rounded-xl border border-amber-500/30 hud-border font-mono space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse" />
+                <span className="text-xs font-black uppercase text-amber-300 tracking-wider">
+                  AUTONOMOUS MISSION CONFIGURATION
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsConfigModalOpen(true)}
+                className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-black uppercase tracking-wider flex items-center space-x-1 cursor-pointer transition shadow-sm shadow-amber-600/30"
+              >
+                <Settings className="w-3 h-3" />
+                <span>CONFIGURE</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                <div className="text-[10px] text-slate-400 uppercase font-bold">Search Altitude</div>
+                <div className="font-extrabold text-amber-300 text-sm mt-0.5">
+                  [ {missionConfig.searchAltitude} m ]
+                </div>
+              </div>
+
+              <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                <div className="text-[10px] text-slate-400 uppercase font-bold">Search Area</div>
+                <div className="font-extrabold text-sky-300 text-xs mt-0.5 truncate">
+                  [ {missionConfig.searchBoundary.type} ]
+                </div>
+              </div>
+
+              <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                <div className="text-[10px] text-slate-400 uppercase font-bold">Search Algorithm</div>
+                <div className="font-extrabold text-slate-200 text-xs mt-0.5 truncate">
+                  [ {missionConfig.searchAlgorithm.replace('_', ' ')} ]
+                </div>
+              </div>
+
+              <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                <div className="text-[10px] text-slate-400 uppercase font-bold">RTL on QR Confirmation</div>
+                <div className={`font-extrabold text-xs mt-0.5 ${missionConfig.rtlOnQrConfirmation ? 'text-emerald-400' : 'text-amber-400'}`}>
+                  [ {missionConfig.rtlOnQrConfirmation ? 'ON' : 'OFF'} ]
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between text-[11px] pt-1 border-t border-slate-800/80">
+              <span className="text-slate-400">Pre-Flight Readiness:</span>
+              <span className={`font-bold flex items-center space-x-1 ${
+                missionValidation.isValid ? 'text-emerald-400' : 'text-amber-400'
+              }`}>
+                <span>{missionValidation.conditions.filter(c => c.passed).length}/9 Checks Passed</span>
+              </span>
+            </div>
+          </div>
+
           {/* Mission Duration Configuration (Operator/Admin) */}
           <div className="bg-slate-900/90 p-3 sm:p-3.5 rounded-xl border border-slate-800 hud-border font-mono space-y-2.5">
             <div className="flex items-center justify-between">
@@ -295,12 +376,13 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <button
               onClick={onStartMission}
-              disabled={!isReadyForMission || isMissionActive}
+              disabled={!missionValidation.isValid || isMissionActive}
               className={`py-3.5 sm:py-4 px-3 rounded-xl font-black text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center space-x-2 transition shadow-lg ${
-                isReadyForMission && !isMissionActive
+                missionValidation.isValid && !isMissionActive
                   ? 'bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white shadow-sky-600/30 cursor-pointer animate-pulse'
                   : 'bg-slate-800/80 text-slate-500 border border-slate-700/50 cursor-not-allowed'
               }`}
+              title={!missionValidation.isValid ? 'START DISABLED: Satisfy all 9 pre-flight validation conditions' : 'Start Autonomous Mission'}
             >
               <Play className="w-4 h-4 fill-current" />
               <span>START MISSION</span>
@@ -329,7 +411,7 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
             connectionState={pixhawkState}
             telemetry={telemetry}
             homePoint={homePoint}
-            isReady={isReadyForMission}
+            isReady={missionValidation.isValid}
           />
 
           <ControlModePanel
@@ -349,6 +431,17 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
           )}
         </div>
       </div>
+
+      {/* Autonomous Mission Configuration Modal */}
+      <AutonomousMissionConfigModal
+        isOpen={isConfigModalOpen}
+        onClose={() => setIsConfigModalOpen(false)}
+        telemetry={telemetry}
+        homePoint={homePoint}
+        pixhawkState={pixhawkState}
+        missionState={missionState}
+        onStartMission={onStartMission}
+      />
     </div>
   );
 };

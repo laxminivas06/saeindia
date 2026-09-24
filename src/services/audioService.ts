@@ -54,6 +54,16 @@ class AudioService {
     }, 100);
   }
 
+  public playTargetLock() {
+    if (this.isMuted) return;
+    this.playBeep(880, 80, 'triangle');
+    setTimeout(() => this.playBeep(1174.66, 120, 'triangle'), 90);
+  }
+
+  public playQrSuccess() {
+    this.playQrDetected();
+  }
+
   // Runner ACK Confirmed (High triumphal triple chime)
   public playRunnerAck() {
     if (this.isMuted) return;

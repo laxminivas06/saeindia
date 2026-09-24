@@ -75,24 +75,22 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
     return 'ESP32'; // Default to ESP32 wireless bridge
   });
 
-  // ESP32 WebSocket Connection Mode: 'LOCAL' (ws://) vs 'SECURE' (wss://)
-  const [esp32Mode, setEsp32Mode] = useState<'LOCAL' | 'SECURE'>(() => {
+  // ESP32 WebSocket Connection Protocol: 'AUTO' | 'WS' | 'WSS'
+  const [protocolMode, setProtocolMode] = useState<'AUTO' | 'WS' | 'WSS'>(() => {
     if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('esp32_proto_mode') as 'AUTO' | 'WS' | 'WSS';
+      if (saved === 'AUTO' || saved === 'WS' || saved === 'WSS') return saved;
       const savedMode = localStorage.getItem('esp32_conn_mode');
-      if (savedMode === 'LOCAL' || savedMode === 'SECURE') return savedMode;
+      if (savedMode === 'SECURE') return 'WSS';
     }
-    return 'LOCAL';
+    return 'AUTO';
   });
 
-  // Local ESP32 IP & Port settings (LOCAL HTTP Mode)
+  // Local ESP32 IP, Port & Path settings
   const [esp32Host, setEsp32Host] = useState<string>(() => {
     if (typeof window !== 'undefined') {
-      try {
-        localStorage.setItem('esp32_host', '192.168.31.194');
-      } catch (e) {
-        // ignore
-      }
-      return '192.168.31.194';
+      const saved = localStorage.getItem('esp32_host');
+      if (saved && saved.trim().length > 0) return saved.trim();
     }
     return '192.168.31.194';
   });
@@ -103,14 +101,24 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
     }
     return 8080;
   });
+  const [esp32Path, setEsp32Path] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      const p = localStorage.getItem('esp32_path');
+      return p !== null ? p : '/ws';
+    }
+    return '/ws';
+  });
 
-  // Secure Endpoint / Relay URL settings (SECURE HTTPS Mode)
+  // Secure Endpoint / Relay URL settings (WSS Mode)
   const [esp32SecureEndpoint, setEsp32SecureEndpoint] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('esp32_secure_endpoint') || 'relay.drone-gcs.com:8443';
     }
     return 'relay.drone-gcs.com:8443';
   });
+
+  // Mobile collapsed toggle
+  const [isMobileCollapsed, setIsMobileCollapsed] = useState(false);
 
   const pageProtocol = typeof window !== 'undefined' ? window.location.protocol.replace(':', '').toUpperCase() : 'HTTP';
   const isHttpsOrigin = typeof window !== 'undefined' && window.location.protocol === 'https:';
@@ -126,9 +134,22 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
   const isWifiConfigured = Boolean(wifiSsid && wifiSsid.trim().length > 0);
 
   // Resolved endpoint URL to display clearly
-  const resolvedTargetUrl = esp32Mode === 'SECURE'
-    ? `wss://${esp32SecureEndpoint.replace(/^wss?:\/\//i, '')}`
-    : `ws://${esp32Host}:${esp32Port}`;
+  const cleanPath = esp32Path ? (esp32Path.startsWith('/') ? esp32Path : `/${esp32Path}`) : '';
+  const effectiveProto = protocolMode === 'WS' ? 'ws' : protocolMode === 'WSS' ? 'wss' : (isHttpsOrigin ? 'wss' : 'ws');
+  const targetHost = (protocolMode === 'WSS' && esp32SecureEndpoint) ? esp32SecureEndpoint.replace(/^wss?:\/\//i, '') : `${esp32Host}:${esp32Port}`;
+  const resolvedTargetUrl = `${effectiveProto}://${targetHost}${cleanPath}`;
+
+  // Five Clear Connection States
+  const linkState: 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED' | 'RECONNECTING' | 'ERROR' = (() => {
+    if (connectionState.esp32LinkState) return connectionState.esp32LinkState;
+    if (isUsbConnected && connectionState.connectionType === 'ESP32_WEBSOCKET') return 'CONNECTED';
+    if (isConnecting || phase === 'SERIAL_OPENING') return 'CONNECTING';
+    if (phase === 'WAITING_FOR_MAVLINK') return 'RECONNECTING';
+    if (phase === 'SERIAL_OPEN_FAILED' || phase === 'CONNECTION_LOST' || Boolean(connectionState.errorMessage)) return 'ERROR';
+    return 'DISCONNECTED';
+  })();
+
+  const latencyMs = connectionState.esp32LatencyMs || (isConnected && connectionState.lastHeartbeat > 0 ? Math.max(1, Date.now() - connectionState.lastHeartbeat) : 0);
 
   // Granular Stage Flags - Stable 10s loss threshold to prevent rapid connecting/disconnecting flapping
   const isWebSocketOpen = isUsbConnected && connectionState.connectionType === 'ESP32_WEBSOCKET';
@@ -197,25 +218,33 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
     }
   };
 
+  // Backward compatibility alias for legacy view sections
+  const esp32Mode: 'LOCAL' | 'SECURE' = protocolMode === 'WSS' ? 'SECURE' : 'LOCAL';
+  const setEsp32Mode = (mode: 'LOCAL' | 'SECURE') => setProtocolMode(mode === 'SECURE' ? 'WSS' : 'WS');
+
   const handleConnectEsp32 = async () => {
     setIsConnecting(true);
     try {
       if (typeof window !== 'undefined') {
-        localStorage.setItem('esp32_conn_mode', esp32Mode);
+        localStorage.setItem('esp32_proto_mode', protocolMode);
+        localStorage.setItem('esp32_conn_mode', protocolMode === 'WSS' ? 'SECURE' : 'LOCAL');
         localStorage.setItem('esp32_host', esp32Host.trim());
         localStorage.setItem('esp32_port', esp32Port.toString());
+        localStorage.setItem('esp32_path', esp32Path.trim());
         localStorage.setItem('esp32_secure_endpoint', esp32SecureEndpoint.trim());
-        localStorage.setItem('esp32_proto', esp32Mode === 'SECURE' ? 'wss' : 'ws');
+        localStorage.setItem('esp32_proto', effectiveProto);
         localStorage.setItem('esp32_baud', selectedBaud.toString());
         localStorage.setItem('esp32_wifi_ssid', wifiSsid.trim());
       }
       
       await mavlinkService.connectEsp32({
-        mode: esp32Mode,
+        protocolMode,
+        mode: protocolMode === 'WSS' ? 'SECURE' : 'LOCAL',
         host: esp32Host.trim(),
         port: esp32Port,
+        path: esp32Path.trim(),
         secureEndpoint: esp32SecureEndpoint.trim(),
-        protocol: esp32Mode === 'SECURE' ? 'wss' : 'ws',
+        protocol: effectiveProto,
         baudRate: selectedBaud,
         wifiSsid: wifiSsid.trim()
       });
@@ -230,7 +259,7 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
     setIsCheckingEsp32(true);
     setEsp32PingResult(null);
     try {
-      const result = await mavlinkService.checkEsp32Http(esp32Host.trim());
+      const result = await mavlinkService.checkEsp32Http(esp32Host.trim(), esp32Port);
       setEsp32PingResult(result);
     } catch (e: any) {
       setEsp32PingResult({ reachable: false, message: e.message || 'Check failed' });
@@ -291,6 +320,42 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
           : 'border-slate-700/80 shadow-slate-950/60'
       } ${className}`}>
         
+        {/* Compact Mobile Link Status Banner (Phones & Small Screens - Keeps camera/mission visible) */}
+        <div className="flex sm:hidden items-center justify-between bg-slate-950/90 px-2.5 py-1.5 rounded-xl border border-slate-800 text-[11px] mb-2 font-mono">
+          <div className="flex items-center space-x-1.5">
+            <span className={`w-2 h-2 rounded-full ${
+              linkState === 'CONNECTED'
+                ? 'bg-emerald-400 animate-ping'
+                : linkState === 'CONNECTING' || linkState === 'RECONNECTING'
+                ? 'bg-amber-400 animate-pulse'
+                : linkState === 'ERROR'
+                ? 'bg-rose-500'
+                : 'bg-slate-500'
+            }`} />
+            <span className="font-bold text-white uppercase text-[10px]">
+              ESP32 ● {linkState === 'CONNECTED' ? 'Connected' : linkState === 'CONNECTING' ? 'Connecting' : linkState === 'RECONNECTING' ? 'Reconnecting' : linkState === 'ERROR' ? 'Error' : 'Offline'}
+            </span>
+          </div>
+          <div className="flex items-center space-x-2 text-[10px]">
+            <span className={isWebSocketOpen ? 'text-emerald-400 font-bold' : 'text-slate-400'}>
+              WS ● {isWebSocketOpen ? 'Healthy' : 'Closed'}
+            </span>
+            <span className={isMavlinkHeartbeatReceived ? 'text-emerald-400 font-bold' : 'text-slate-400'}>
+              HB ● {isMavlinkHeartbeatReceived ? 'OK' : 'Wait'}
+            </span>
+            <button
+              onClick={() => setIsMobileCollapsed(!isMobileCollapsed)}
+              className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-purple-300 font-bold border border-slate-700 transition"
+              title={isMobileCollapsed ? 'Expand Connection Panel' : 'Collapse Panel'}
+            >
+              {isMobileCollapsed ? 'Controls ▼' : 'Hide ▲'}
+            </button>
+          </div>
+        </div>
+
+        {/* Responsive Content Wrapper (Collapsible on Mobile) */}
+        <div className={isMobileCollapsed ? 'hidden sm:block' : 'block'}>
+
         {/* Top Header & Connection Mode Selector */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
           <div className="flex items-center space-x-2.5 min-w-0">
@@ -425,44 +490,74 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
         {connectionMethod === 'ESP32' && (
           <div className="my-3 p-3.5 bg-purple-950/30 border border-purple-500/40 rounded-xl space-y-3">
             
-            {/* Top Bar: Connection Mode Buttons [ LOCAL ] [ SECURE ] & Guide Action */}
+            {/* Top Bar: Protocol Selector [ Auto ] [ WS ] [ WSS ] & Direct Webpage & Help */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-2.5 border-b border-purple-500/20">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs font-bold text-slate-300 uppercase tracking-wide">
-                  CONNECTION MODE:
+                  PROTOCOL:
                 </span>
                 
-                {/* Explicit Connection Mode Switcher: LOCAL vs SECURE */}
+                {/* Protocol Selector: [ Auto ] [ WS ] [ WSS ] */}
                 <div className="flex items-center space-x-1 bg-slate-950 p-1 rounded-xl border border-purple-500/40">
                   <button
                     onClick={() => {
-                      setEsp32Mode('LOCAL');
-                      if (typeof window !== 'undefined') localStorage.setItem('esp32_conn_mode', 'LOCAL');
+                      setProtocolMode('AUTO');
+                      if (typeof window !== 'undefined') localStorage.setItem('esp32_proto_mode', 'AUTO');
                     }}
-                    className={`px-3 py-1 rounded-lg text-xs font-black transition cursor-pointer flex items-center space-x-1.5 ${
-                      esp32Mode === 'LOCAL'
+                    className={`px-3 py-1 rounded-lg text-xs font-black transition cursor-pointer flex items-center space-x-1 ${
+                      protocolMode === 'AUTO'
                         ? 'bg-purple-600 text-white shadow-md shadow-purple-600/30'
                         : 'text-slate-400 hover:text-slate-200'
                     }`}
+                    title="Auto: HTTP → WS, HTTPS → WSS (with WS fallback)"
                   >
-                    <span>LOCAL (ws://)</span>
+                    <Zap className="w-3 h-3 text-purple-300" />
+                    <span>Auto</span>
                   </button>
 
                   <button
                     onClick={() => {
-                      setEsp32Mode('SECURE');
-                      if (typeof window !== 'undefined') localStorage.setItem('esp32_conn_mode', 'SECURE');
+                      setProtocolMode('WS');
+                      if (typeof window !== 'undefined') {
+                        localStorage.setItem('esp32_proto_mode', 'WS');
+                        localStorage.setItem('esp32_conn_mode', 'LOCAL');
+                      }
                     }}
-                    className={`px-3 py-1 rounded-lg text-xs font-black transition cursor-pointer flex items-center space-x-1.5 ${
-                      esp32Mode === 'SECURE'
+                    className={`px-3 py-1 rounded-lg text-xs font-black transition cursor-pointer flex items-center space-x-1 ${
+                      protocolMode === 'WS'
+                        ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                    title="Direct local non-TLS WebSocket (ws://) for ESP32"
+                  >
+                    <span>WS (ws://)</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setProtocolMode('WSS');
+                      if (typeof window !== 'undefined') {
+                        localStorage.setItem('esp32_proto_mode', 'WSS');
+                        localStorage.setItem('esp32_conn_mode', 'SECURE');
+                      }
+                    }}
+                    className={`px-3 py-1 rounded-lg text-xs font-black transition cursor-pointer flex items-center space-x-1 ${
+                      protocolMode === 'WSS'
                         ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
                         : 'text-slate-400 hover:text-slate-200'
                     }`}
+                    title="Secure TLS WebSocket (wss://) for production server / relay"
                   >
-                    <Lock className="w-3.5 h-3.5 text-emerald-200" />
-                    <span>SECURE (wss://)</span>
+                    <Lock className="w-3 h-3 text-emerald-200" />
+                    <span>WSS (wss://)</span>
                   </button>
                 </div>
+
+                {protocolMode === 'AUTO' && (
+                  <span className="text-[10px] text-slate-400 font-mono hidden md:inline">
+                    ({pageProtocol} page → {isHttpsOrigin ? 'tries WSS first' : 'direct WS'})
+                  </span>
+                )}
               </div>
 
               <div className="flex items-center space-x-2">
@@ -478,16 +573,14 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                   <span>ESP32 Webpage</span>
                 </a>
 
-                {esp32Mode === 'LOCAL' && (
-                  <button
-                    onClick={handleCheckEsp32}
-                    disabled={isCheckingEsp32}
-                    className="text-[11px] px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 flex items-center space-x-1 cursor-pointer transition"
-                  >
-                    {isCheckingEsp32 ? <Loader2 className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3" />}
-                    <span>Check Ping</span>
-                  </button>
-                )}
+                <button
+                  onClick={handleCheckEsp32}
+                  disabled={isCheckingEsp32}
+                  className="text-[11px] px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 flex items-center space-x-1 cursor-pointer transition"
+                >
+                  {isCheckingEsp32 ? <Loader2 className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3" />}
+                  <span>Check Ping</span>
+                </button>
 
                 <button
                   onClick={() => setShowEsp32Guide(true)}
@@ -514,155 +607,205 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
               </div>
             )}
 
-            {/* Input Controls Bar for LOCAL vs SECURE Mode */}
-            {esp32Mode === 'LOCAL' ? (
-              /* LOCAL MODE INPUTS: ws:// + IP + Port + Baud + Connect / Disconnect */
-              <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 text-xs items-center">
-                
-                {/* Protocol Static Badge */}
-                <div className="sm:col-span-2 flex items-center space-x-1.5 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-700">
-                  <span className="text-slate-400 text-[10px] font-bold uppercase shrink-0">Proto:</span>
-                  <span className="text-purple-300 font-mono font-bold">ws://</span>
-                </div>
-
-                {/* ESP32 IP Input */}
-                <div className="sm:col-span-4 flex items-center space-x-1.5 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-700">
-                  <span className="text-slate-400 text-[10px] font-bold uppercase shrink-0">ESP32 IP:</span>
-                  <input
-                    type="text"
-                    value={esp32Host}
-                    onChange={(e) => setEsp32Host(e.target.value)}
-                    placeholder="192.168.31.194"
-                    className="bg-transparent text-slate-100 font-mono text-xs w-full focus:outline-none"
-                  />
-                </div>
-
-                {/* Port Input */}
-                <div className="sm:col-span-2 flex items-center space-x-1.5 bg-slate-950 px-2.5 py-1.5 rounded-lg border border-slate-700">
-                  <span className="text-slate-400 text-[10px] font-bold uppercase shrink-0">Port:</span>
-                  <input
-                    type="number"
-                    value={esp32Port}
-                    onChange={(e) => setEsp32Port(parseInt(e.target.value, 10) || 8080)}
-                    placeholder="8080"
-                    className="bg-transparent text-slate-100 font-mono text-xs w-full focus:outline-none"
-                  />
-                </div>
-
-                {/* Baud Rate Dropdown */}
-                <div className="sm:col-span-2 flex items-center space-x-1 bg-slate-950 px-2 py-1.5 rounded-lg border border-slate-700">
-                  <span className="text-slate-400 text-[10px] font-bold uppercase shrink-0">Baud:</span>
-                  <select
-                    value={selectedBaud}
-                    onChange={(e) => handleBaudChange(Number(e.target.value))}
-                    className="bg-transparent text-slate-100 font-mono text-xs w-full focus:outline-none cursor-pointer"
-                  >
-                    <option value={57600} className="bg-slate-900 text-white">57600</option>
-                    <option value={115200} className="bg-slate-900 text-white">115200</option>
-                    <option value={921600} className="bg-slate-900 text-white">921600</option>
-                    <option value={38400} className="bg-slate-900 text-white">38400</option>
-                  </select>
-                </div>
-
-                {/* Action Button: Connect / Disconnect with Confirmation */}
-                <div className="sm:col-span-2">
-                  {isConnecting ? (
-                    <button
-                      disabled
-                      className="w-full py-2.5 bg-purple-800 text-purple-200 rounded-lg text-xs font-black uppercase tracking-wide flex items-center justify-center space-x-1.5 opacity-80 cursor-not-allowed"
-                    >
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      <span>CONNECTING...</span>
-                    </button>
-                  ) : isEsp32Active ? (
-                    <button
-                      onClick={() => setShowDisconnectConfirm(true)}
-                      className="w-full py-2.5 bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white rounded-lg text-xs font-black uppercase tracking-wide transition flex items-center justify-center space-x-1.5 shadow-lg shadow-rose-600/30 cursor-pointer"
-                    >
-                      <PowerOff className="w-3.5 h-3.5" />
-                      <span>DISCONNECT</span>
-                    </button>
-                  ) : (
-                    <button
-                      onClick={handleConnectEsp32}
-                      className="w-full py-2.5 bg-purple-600 hover:bg-purple-500 active:bg-purple-700 text-white rounded-lg text-xs font-black uppercase tracking-wide transition flex items-center justify-center space-x-1.5 shadow-lg shadow-purple-600/30 cursor-pointer"
-                    >
-                      <Wifi className="w-3.5 h-3.5" />
-                      <span>CONNECT</span>
-                    </button>
-                  )}
-                </div>
+            {/* Input Controls Bar: Protocol badge + Host + Port + Path + Baud + Connect/Disconnect */}
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 text-xs items-center">
+              
+              {/* Protocol Badge */}
+              <div className="sm:col-span-2 flex items-center space-x-1 bg-slate-950 px-2.5 py-1.5 rounded-lg border border-slate-700">
+                <span className="text-slate-400 text-[10px] font-bold uppercase shrink-0">Proto:</span>
+                <span className={`font-mono font-bold text-[11px] ${
+                  effectiveProto === 'wss' ? 'text-emerald-300' : 'text-purple-300'
+                }`}>
+                  {effectiveProto}://
+                </span>
               </div>
-            ) : (
-              /* SECURE MODE INPUTS: wss:// + Secure Relay Endpoint + Baud + Connect / Disconnect */
-              <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 text-xs items-center">
-                
-                {/* Protocol Static Badge */}
-                <div className="sm:col-span-2 flex items-center space-x-1.5 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-700">
-                  <span className="text-slate-400 text-[10px] font-bold uppercase shrink-0">Proto:</span>
-                  <span className="text-emerald-300 font-mono font-bold flex items-center space-x-1">
-                    <Lock className="w-3 h-3 text-emerald-400" />
-                    <span>wss://</span>
+
+              {/* ESP32 Host Input */}
+              <div className="sm:col-span-3 flex items-center space-x-1.5 bg-slate-950 px-2.5 py-1.5 rounded-lg border border-slate-700">
+                <span className="text-slate-400 text-[10px] font-bold uppercase shrink-0">Host:</span>
+                <input
+                  type="text"
+                  value={esp32Host}
+                  onChange={(e) => setEsp32Host(e.target.value)}
+                  placeholder="192.168.31.194"
+                  className="bg-transparent text-slate-100 font-mono text-xs w-full focus:outline-none"
+                  title="ESP32 IP or Hostname"
+                />
+              </div>
+
+              {/* Port Input */}
+              <div className="sm:col-span-2 flex items-center space-x-1.5 bg-slate-950 px-2.5 py-1.5 rounded-lg border border-slate-700">
+                <span className="text-slate-400 text-[10px] font-bold uppercase shrink-0">Port:</span>
+                <input
+                  type="number"
+                  value={esp32Port}
+                  onChange={(e) => setEsp32Port(parseInt(e.target.value, 10) || 8080)}
+                  placeholder="8080"
+                  className="bg-transparent text-slate-100 font-mono text-xs w-full focus:outline-none"
+                />
+              </div>
+
+              {/* Path Input */}
+              <div className="sm:col-span-2 flex items-center space-x-1.5 bg-slate-950 px-2.5 py-1.5 rounded-lg border border-slate-700">
+                <span className="text-slate-400 text-[10px] font-bold uppercase shrink-0">Path:</span>
+                <input
+                  type="text"
+                  value={esp32Path}
+                  onChange={(e) => setEsp32Path(e.target.value)}
+                  placeholder="/ws"
+                  className="bg-transparent text-slate-100 font-mono text-xs w-full focus:outline-none"
+                  title="WebSocket Path (default /ws)"
+                />
+              </div>
+
+              {/* Baud Rate */}
+              <div className="sm:col-span-1 flex items-center space-x-1 bg-slate-950 px-2 py-1.5 rounded-lg border border-slate-700">
+                <select
+                  value={selectedBaud}
+                  onChange={(e) => handleBaudChange(Number(e.target.value))}
+                  className="bg-transparent text-slate-100 font-mono text-[11px] w-full focus:outline-none cursor-pointer"
+                  title="MAVLink Baud Rate"
+                >
+                  <option value={57600} className="bg-slate-900 text-white">57600</option>
+                  <option value={115200} className="bg-slate-900 text-white">115200</option>
+                  <option value={921600} className="bg-slate-900 text-white">921600</option>
+                  <option value={38400} className="bg-slate-900 text-white">38400</option>
+                </select>
+              </div>
+
+              {/* Action Button: Connect / Disconnect */}
+              <div className="sm:col-span-2">
+                {isConnecting ? (
+                  <button
+                    disabled
+                    className="w-full py-2 bg-purple-800 text-purple-200 rounded-lg text-xs font-black uppercase tracking-wide flex items-center justify-center space-x-1.5 opacity-80 cursor-not-allowed"
+                  >
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>CONNECTING...</span>
+                  </button>
+                ) : isEsp32Active ? (
+                  <button
+                    onClick={() => setShowDisconnectConfirm(true)}
+                    className="w-full py-2 bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white rounded-lg text-xs font-black uppercase tracking-wide transition flex items-center justify-center space-x-1.5 shadow-lg shadow-rose-600/30 cursor-pointer"
+                  >
+                    <PowerOff className="w-3.5 h-3.5" />
+                    <span>DISCONNECT</span>
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleConnectEsp32}
+                    className="w-full py-2 bg-purple-600 hover:bg-purple-500 active:bg-purple-700 text-white rounded-lg text-xs font-black uppercase tracking-wide transition flex items-center justify-center space-x-1.5 shadow-lg shadow-purple-600/30 cursor-pointer"
+                  >
+                    <Wifi className="w-3.5 h-3.5" />
+                    <span>CONNECT {protocolMode === 'WSS' ? 'WSS' : 'WS'}</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Optional Secure Relay input when WSS is selected */}
+            {protocolMode === 'WSS' && (
+              <div className="flex items-center space-x-2 bg-slate-950/80 p-2 rounded-lg border border-emerald-500/30 text-xs">
+                <span className="text-emerald-400 font-bold shrink-0 flex items-center space-x-1">
+                  <Lock className="w-3 h-3" />
+                  <span>Secure Relay / Proxy Endpoint:</span>
+                </span>
+                <input
+                  type="text"
+                  value={esp32SecureEndpoint}
+                  onChange={(e) => setEsp32SecureEndpoint(e.target.value)}
+                  placeholder="relay.drone-gcs.com:8443"
+                  className="bg-slate-900 px-2 py-1 rounded text-slate-100 font-mono text-xs w-full border border-slate-700 focus:outline-none"
+                  title="Reverse proxy or relay endpoint for WSS"
+                />
+              </div>
+            )}
+
+            {/* 5 Clear States Real-Time Status Card */}
+            <div className={`p-3 rounded-xl border transition ${
+              linkState === 'CONNECTED'
+                ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-200'
+                : linkState === 'CONNECTING'
+                ? 'bg-amber-950/40 border-amber-500/50 text-amber-200'
+                : linkState === 'RECONNECTING'
+                ? 'bg-sky-950/40 border-sky-500/50 text-sky-200'
+                : linkState === 'ERROR'
+                ? 'bg-rose-950/40 border-rose-500/50 text-rose-200'
+                : 'bg-slate-950/80 border-slate-800 text-slate-300'
+            }`}>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex items-center space-x-2">
+                  <span className={`w-2.5 h-2.5 rounded-full ${
+                    linkState === 'CONNECTED'
+                      ? 'bg-emerald-400 animate-ping'
+                      : linkState === 'CONNECTING'
+                      ? 'bg-amber-400 animate-pulse'
+                      : linkState === 'RECONNECTING'
+                      ? 'bg-sky-400 animate-pulse'
+                      : linkState === 'ERROR'
+                      ? 'bg-rose-500'
+                      : 'bg-slate-500'
+                  }`} />
+                  <span className="font-mono font-black text-sm uppercase">
+                    ● ESP32 {linkState === 'CONNECTED' ? 'Connected' : linkState === 'CONNECTING' ? 'Connecting...' : linkState === 'RECONNECTING' ? 'Reconnecting...' : linkState === 'ERROR' ? 'Connection Error' : 'Disconnected'}
                   </span>
                 </div>
 
-                {/* Secure Relay Host / URL Input */}
-                <div className="sm:col-span-6 flex items-center space-x-1.5 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-700">
-                  <span className="text-slate-400 text-[10px] font-bold uppercase shrink-0">Secure Endpoint:</span>
-                  <input
-                    type="text"
-                    value={esp32SecureEndpoint}
-                    onChange={(e) => setEsp32SecureEndpoint(e.target.value)}
-                    placeholder="relay.drone-gcs.com:8443"
-                    className="bg-transparent text-slate-100 font-mono text-xs w-full focus:outline-none"
-                  />
-                </div>
-
-                {/* Baud Rate Dropdown */}
-                <div className="sm:col-span-2 flex items-center space-x-1 bg-slate-950 px-2 py-1.5 rounded-lg border border-slate-700">
-                  <span className="text-slate-400 text-[10px] font-bold uppercase shrink-0">Baud:</span>
-                  <select
-                    value={selectedBaud}
-                    onChange={(e) => handleBaudChange(Number(e.target.value))}
-                    className="bg-transparent text-slate-100 font-mono text-xs w-full focus:outline-none cursor-pointer"
-                  >
-                    <option value={57600} className="bg-slate-900 text-white">57600</option>
-                    <option value={115200} className="bg-slate-900 text-white">115200</option>
-                    <option value={921600} className="bg-slate-900 text-white">921600</option>
-                    <option value={38400} className="bg-slate-900 text-white">38400</option>
-                  </select>
-                </div>
-
-                {/* Action Button */}
-                <div className="sm:col-span-2">
-                  {isConnecting ? (
-                    <button
-                      disabled
-                      className="w-full py-2.5 bg-emerald-800 text-emerald-200 rounded-lg text-xs font-black uppercase tracking-wide flex items-center justify-center space-x-1.5 opacity-80 cursor-not-allowed"
-                    >
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      <span>CONNECTING...</span>
-                    </button>
-                  ) : isEsp32Active ? (
-                    <button
-                      onClick={() => setShowDisconnectConfirm(true)}
-                      className="w-full py-2.5 bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white rounded-lg text-xs font-black uppercase tracking-wide transition flex items-center justify-center space-x-1.5 shadow-lg shadow-rose-600/30 cursor-pointer"
-                    >
-                      <PowerOff className="w-3.5 h-3.5" />
-                      <span>DISCONNECT</span>
-                    </button>
-                  ) : (
-                    <button
-                      onClick={handleConnectEsp32}
-                      className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white rounded-lg text-xs font-black uppercase tracking-wide transition flex items-center justify-center space-x-1.5 shadow-lg shadow-emerald-600/30 cursor-pointer"
-                    >
-                      <Lock className="w-3.5 h-3.5" />
-                      <span>CONNECT WSS</span>
-                    </button>
+                {/* State metrics */}
+                <div className="flex flex-wrap items-center gap-3 text-xs font-mono">
+                  <div>
+                    <span className="text-slate-400">WS: </span>
+                    <span className="font-bold text-white">
+                      {isWebSocketOpen ? 'Connected' : linkState === 'CONNECTING' ? 'Connecting' : linkState === 'RECONNECTING' ? 'Reconnecting' : 'Disconnected'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400">Heartbeat: </span>
+                    <span className={`font-bold ${
+                      isMavlinkHeartbeatReceived ? 'text-emerald-400' : isWaitingMavlink ? 'text-amber-400' : 'text-slate-400'
+                    }`}>
+                      {isMavlinkHeartbeatReceived ? 'Healthy' : isWaitingMavlink ? 'Waiting' : 'None'}
+                    </span>
+                  </div>
+                  {latencyMs > 0 && (
+                    <div>
+                      <span className="text-slate-400">Latency: </span>
+                      <span className="font-bold text-cyan-300">{latencyMs} ms</span>
+                    </div>
                   )}
+                  <div>
+                    <span className="text-slate-400">Endpoint: </span>
+                    <span className="text-slate-300 underline">{resolvedTargetUrl}</span>
+                  </div>
                 </div>
               </div>
-            )}
+
+              {/* Informative fallback message if WSS is unavailable */}
+              {connectionState.esp32ErrorCategory === 'WSS_TLS_FAILURE' && (
+                <div className="mt-2 pt-2 border-t border-rose-500/30 text-xs text-amber-300 flex items-start space-x-1.5">
+                  <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="text-amber-200">⚠ Secure WebSocket unavailable:</strong>
+                    <div>The ESP32 endpoint does not appear to support WSS. Using WS for local ESP32 communication.</div>
+                  </div>
+                </div>
+              )}
+
+              {/* Insecure mixed-content blocking banner */}
+              {connectionState.esp32ErrorCategory === 'MIXED_CONTENT_BLOCK' && (
+                <div className="mt-2 pt-2 border-t border-rose-500/30 text-xs text-rose-200 flex items-start space-x-1.5">
+                  <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="text-rose-100">⚠ Mixed-Content Browser Blocking:</strong>
+                    <div>Modern browsers block insecure <code>ws://</code> from HTTPS pages (<code>{window.location.origin}</code>).</div>
+                    <div className="mt-1 text-slate-300">
+                      • For local testing without TLS, open Ground Station over <code>http://</code> (e.g. <code>http://{window.location.hostname}:5173</code>).
+                      <br />• For production HTTPS, use a WebSocket reverse proxy relay (<code>HTTPS → WSS → Proxy → WS → ESP32</code>).
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
 
             {/* ========================================================================= */}
             {/* SECTION 9: RESPONSIVE CONNECTION STATUS MATRIX & PERSISTENCE SUMMARY      */}
@@ -1139,8 +1282,9 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
             >
               Request Permission
             </button>
-          </div>
-        ) : null}
+            </div>
+          ) : null}
+        </div>
       </div>
 
       {/* ========================================================================= */}

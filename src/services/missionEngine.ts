@@ -1,14 +1,55 @@
-import { MissionState, PreFlightChecklist, MissionLogEntry, DecodedQRData } from '../types/mission';
+import { 
+  MissionState, 
+  PreFlightChecklist, 
+  MissionLogEntry, 
+  DecodedQRData,
+  AutonomousMissionConfig,
+  AutonomousMissionValidation,
+  MissionPreFlightCondition,
+  SearchBoundaryConfig,
+  FlightCommandAuthority
+} from '../types/mission';
 import { mavlinkService } from './mavlinkService';
 import { runnerCommService } from './runnerCommService';
 import { visionService } from './visionService';
 import { audioService } from './audioService';
 import { storageService } from './storageService';
+import { searchEngine } from './searchEngine';
 
 type MissionStateListener = (state: MissionState, elapsedSec: number, remainingSec: number) => void;
+type AuthorityListener = (authority: FlightCommandAuthority) => void;
 
 const PERSISTENCE_KEY = 'SAE_MISSION_PERSISTENT_STATE';
 const CONFIG_DURATION_KEY = 'SAE_CONFIGURED_MISSION_DURATION';
+const CONFIG_AUTONOMOUS_KEY = 'SAE_AUTONOMOUS_MISSION_CONFIG_V1';
+
+const DEFAULT_AUTONOMOUS_CONFIG: AutonomousMissionConfig = {
+  searchAltitude: 10, // 10 meters default
+  searchBoundary: {
+    type: 'RECTANGLE',
+    coordinates: [
+      { lat: 12.9722, lng: 77.5940 },
+      { lat: 12.9722, lng: 77.5952 },
+      { lat: 12.9712, lng: 77.5952 },
+      { lat: 12.9712, lng: 77.5940 }
+    ],
+    widthMeters: 100,
+    heightMeters: 80,
+    areaSquareMeters: 8000,
+    label: 'Standard Rectangle (100x80m)'
+  },
+  searchAlgorithm: 'GRID',
+  flightSpeedMs: 3.0,
+  gridSpacingMeters: 5.0,
+  desiredOverlapPercent: 25,
+  cameraFovHorizontalDeg: 70,
+  cameraFovVerticalDeg: 52,
+  inspectionHoverSeconds: 4,
+  rtlOnQrConfirmation: true,
+  autoRtlOnCriticalFailure: true,
+  stabilizationSeconds: 2,
+  altitudeToleranceMeters: 0.5
+};
 
 interface PersistedMissionState {
   currentState: MissionState;
@@ -23,17 +64,24 @@ interface PersistedMissionState {
   homeLat?: number;
   homeLon?: number;
   homeAlt?: number;
+  commandAuthority?: FlightCommandAuthority;
 }
 
 class MissionEngine {
   private currentState: MissionState = 'IDLE';
+  private commandAuthority: FlightCommandAuthority = 'NONE';
   private missionDurationLimitSec: number = 180; // Default 3-Minute Mission Window
   private remainingSeconds: number = 180;
   private elapsedSeconds: number = 0;
   private missionStartTime: number = 0;
   private timerInterval: any = null;
 
+  // Autonomous Mission Configuration
+  private missionConfig: AutonomousMissionConfig = { ...DEFAULT_AUTONOMOUS_CONFIG };
+  private stabilizationTimer: any = null;
+
   private stateListeners: Set<MissionStateListener> = new Set();
+  private authorityListeners: Set<AuthorityListener> = new Set();
   private stateTransitions: Array<{ state: MissionState; timestamp: number; note?: string }> = [];
 
   private currentMissionNumber: number = 1;
@@ -48,6 +96,10 @@ class MissionEngine {
   private armingTimeoutTimer: any = null;
   private isAwaitingFcMotorStart: boolean = false;
 
+  // Safety & Failsafe Watchdog Monitor
+  private failsafeWatchdogTimer: any = null;
+  private rtlCommandSent: boolean = false;
+
   constructor() {
     this.currentMissionNumber = storageService.getNextMissionNumber();
     if (typeof window !== 'undefined') {
@@ -59,9 +111,40 @@ class MissionEngine {
           this.remainingSeconds = parsed;
         }
       }
+      this.restoreAutonomousConfig();
     }
     this.restorePersistentState();
     this.initListeners();
+    this.startFailsafeWatchdog();
+  }
+
+  private restoreAutonomousConfig() {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = localStorage.getItem(CONFIG_AUTONOMOUS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        this.missionConfig = {
+          ...DEFAULT_AUTONOMOUS_CONFIG,
+          ...parsed,
+          searchBoundary: {
+            ...DEFAULT_AUTONOMOUS_CONFIG.searchBoundary,
+            ...(parsed.searchBoundary || {})
+          }
+        };
+      }
+    } catch (e) {
+      console.warn('Failed to restore autonomous mission config', e);
+    }
+  }
+
+  private persistAutonomousConfig() {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.setItem(CONFIG_AUTONOMOUS_KEY, JSON.stringify(this.missionConfig));
+    } catch (e) {
+      console.warn('Failed to save autonomous mission config', e);
+    }
   }
 
   private restorePersistentState() {
@@ -75,6 +158,10 @@ class MissionEngine {
         }
         if (data.homePointSet && data.homeLat && data.homeLon) {
           mavlinkService.setHomePoint(data.homeLat, data.homeLon, data.homeAlt);
+        }
+
+        if (data.commandAuthority) {
+          this.commandAuthority = data.commandAuthority;
         }
 
         if (data.startTime && data.startTime > 0 && data.currentState !== 'MISSION_COMPLETE' && data.currentState !== 'IDLE') {
@@ -101,6 +188,7 @@ class MissionEngine {
           if (this.remainingSeconds > 0) {
             this.startMasterTimer();
             if (this.currentState === 'TAKEOFF' || this.currentState === 'SEARCHING') {
+              this.commandAuthority = 'AUTONOMOUS';
               mavlinkService.commandStartSearch();
             }
           } else {
@@ -129,7 +217,8 @@ class MissionEngine {
         homePointSet: home.isSet,
         homeLat: home.latitude,
         homeLon: home.longitude,
-        homeAlt: home.altitude
+        homeAlt: home.altitude,
+        commandAuthority: this.commandAuthority
       };
       localStorage.setItem(PERSISTENCE_KEY, JSON.stringify(stateToSave));
     } catch (e) {
@@ -149,7 +238,7 @@ class MissionEngine {
   private initListeners() {
     // 1. Subscribe to Live QR Detection from Vision Service
     visionService.subscribeQR((data) => {
-      if (data && data.isValidTwoDigit) {
+      if (data && data.isValidTwoDigit && this.commandAuthority === 'AUTONOMOUS') {
         this.handleQRDetected(data);
       }
     });
@@ -169,19 +258,85 @@ class MissionEngine {
         this.onFcMotorsStartedConfirmed();
       }
 
-      if (this.currentState === 'TAKEOFF' && telemetry.altitude >= 18) {
-        this.transitionTo('SEARCHING', 'Cruise altitude 20m reached. Autonomous lawnmower search active.');
-        mavlinkService.commandStartSearch();
+      // Automatic Climb Sequence: Takeoff / Climbing -> Target Altitude Reached -> Stabilizing -> Searching
+      if ((this.currentState === 'TAKEOFF' || this.currentState === 'CLIMBING' || this.currentState === 'CLIMBING_TO_ALTITUDE') && this.commandAuthority === 'AUTONOMOUS') {
+        const targetAlt = this.missionConfig.searchAltitude;
+        const tolerance = this.missionConfig.altitudeToleranceMeters || 0.5;
+
+        if (telemetry.altitude >= (targetAlt - tolerance)) {
+          // Target altitude reached; transition to altitude stabilization phase
+          this.transitionTo(
+            'ALTITUDE_STABILIZING',
+            `Target altitude ${targetAlt}m reached (Current: ${telemetry.altitude.toFixed(1)}m). Stabilizing position for ${this.missionConfig.stabilizationSeconds}s before starting search.`
+          );
+
+          if (this.stabilizationTimer) clearTimeout(this.stabilizationTimer);
+          this.stabilizationTimer = setTimeout(() => {
+            const currentTelem = mavlinkService.getTelemetry();
+            if (
+              this.currentState === 'ALTITUDE_STABILIZING' &&
+              this.commandAuthority === 'AUTONOMOUS' &&
+              Math.abs(currentTelem.altitude - targetAlt) <= (tolerance + 0.8)
+            ) {
+              this.transitionTo(
+                'SEARCHING',
+                `Altitude stabilized at ${currentTelem.altitude.toFixed(1)}m. Commencing autonomous ${this.missionConfig.searchAlgorithm} search pattern.`
+              );
+              searchEngine.updateConfig({
+                searchAltitude: targetAlt,
+                searchBoundary: this.missionConfig.searchBoundary,
+                algorithm: this.missionConfig.searchAlgorithm,
+                flightSpeedMs: this.missionConfig.flightSpeedMs,
+                desiredOverlapPercent: this.missionConfig.desiredOverlapPercent || 25
+              });
+              searchEngine.startSearch(targetAlt);
+              mavlinkService.commandStartSearch();
+            }
+          }, (this.missionConfig.stabilizationSeconds || 2) * 1000);
+        }
       }
 
+      // Controlled Mid-Flight Altitude Update: Climbing/Descending towards new Target Altitude
+      if (this.currentState === 'ALTITUDE_UPDATING' && this.commandAuthority === 'AUTONOMOUS') {
+        const targetAlt = this.missionConfig.searchAltitude;
+        const tolerance = this.missionConfig.altitudeToleranceMeters || 0.5;
+
+        if (Math.abs(telemetry.altitude - targetAlt) <= tolerance) {
+          this.transitionTo(
+            'ALTITUDE_STABILIZING',
+            `New target altitude ${targetAlt}m reached (Current: ${telemetry.altitude.toFixed(1)}m). Stabilizing for 1.5s...`
+          );
+
+          if (this.stabilizationTimer) clearTimeout(this.stabilizationTimer);
+          this.stabilizationTimer = setTimeout(() => {
+            if (this.currentState === 'ALTITUDE_STABILIZING' && this.commandAuthority === 'AUTONOMOUS') {
+              this.transitionTo(
+                'SEARCHING',
+                `Altitude stabilized at ${targetAlt}m. Resuming autonomous search pattern.`
+              );
+              searchEngine.updateConfig({
+                searchAltitude: targetAlt,
+                searchBoundary: this.missionConfig.searchBoundary,
+                algorithm: this.missionConfig.searchAlgorithm,
+                flightSpeedMs: this.missionConfig.flightSpeedMs,
+                desiredOverlapPercent: this.missionConfig.desiredOverlapPercent || 25
+              });
+              searchEngine.startSearch(targetAlt);
+              mavlinkService.commandStartSearch();
+            }
+          }, 1500);
+        }
+      }
+
+      // Landing to Landed State Transition
       if (this.currentState === 'LANDING' && telemetry.altitude <= 0.3 && !telemetry.isArmed) {
+        this.transitionTo('LANDED', 'UAV touchdown confirmed at Home Reference. Motors disarmed.');
         this.finalizeMission('SUCCESS');
       }
 
-      if (this.currentState !== 'IDLE' && this.currentState !== 'MISSION_COMPLETE' && !telemetry.pixhawkConnected) {
-        if (this.currentState !== 'CONNECTION_LOST') {
-          this.transitionTo('CONNECTION_LOST', 'Pixhawk MAVLink connection lost!');
-        }
+      // If in RTL or RETURNING_HOME and altitude reaches descent threshold
+      if ((this.currentState === 'RTL' || this.currentState === 'RETURNING_HOME') && telemetry.distanceToHome <= 2.5 && telemetry.altitude <= 3.0) {
+        this.transitionTo('LANDING', 'Descending at Home coordinates.');
       }
     });
 
@@ -200,6 +355,211 @@ class MissionEngine {
       }
     });
   }
+
+  /**
+   * Continuous Autonomous Failure Watchdog:
+   * Monitors MAVLink link, GPS 3D fix, Camera feed, and Search boundary.
+   * If a critical problem occurs during an active airborne mission, safely halts search and transitions to Failsafe/RTL.
+   */
+  private startFailsafeWatchdog() {
+    if (this.failsafeWatchdogTimer) clearInterval(this.failsafeWatchdogTimer);
+
+    this.failsafeWatchdogTimer = setInterval(() => {
+      const isAirborne =
+        this.currentState === 'TAKEOFF' ||
+        this.currentState === 'CLIMBING' ||
+        this.currentState === 'CLIMBING_TO_ALTITUDE' ||
+        this.currentState === 'ALTITUDE_STABILIZING' ||
+        this.currentState === 'ALTITUDE_UPDATING' ||
+        this.currentState === 'SEARCHING' ||
+        this.currentState === 'OBJECT_DETECTED' ||
+        this.currentState === 'BOX_DETECTED' ||
+        this.currentState === 'INSPECTING' ||
+        this.currentState === 'QR_DETECTION' ||
+        this.currentState === 'QR_SCANNING' ||
+        this.currentState === 'QR_DECODED' ||
+        this.currentState === 'DATA_CONFIRMED' ||
+        this.currentState === 'SEND_TO_RUNNER' ||
+        this.currentState === 'WAIT_FOR_RUNNER_ACK';
+
+      if (!isAirborne) return;
+
+      const telem = mavlinkService.getTelemetry();
+      const conn = mavlinkService.getConnectionState();
+      const cam = visionService.getCameraState();
+
+      // Check 1: MAVLink / Heartbeat Connection Failure
+      const isHeartbeatLost =
+        !conn.isConnected ||
+        (!conn.isReceivingTelemetry && conn.lastHeartbeat > 0 && Date.now() - conn.lastHeartbeat > 4500 && conn.connectionType !== 'SIMULATED');
+
+      if (isHeartbeatLost && this.currentState !== 'CONNECTION_LOST' && this.currentState !== 'FAILSAFE') {
+        this.handleCriticalFailure('CONNECTION_LOST', 'MAVLink Heartbeat stream lost (>4.5s). Halting search.');
+        return;
+      }
+
+      // Check 2: GPS Position Failure / Satellite Drop
+      const isGpsLost = !telem.gps.isLocked || (telem.gps.satellites < 5 && conn.connectionType !== 'SIMULATED');
+      if (isGpsLost && this.currentState !== 'GPS_ERROR' && this.currentState !== 'FAILSAFE') {
+        this.handleCriticalFailure('GPS_ERROR', 'GPS 3D Fix Lost (<5 Satellites). Halting autonomous navigation.');
+        return;
+      }
+
+      // Check 3: Camera Feed Failure
+      if (cam.error && this.currentState !== 'CAMERA_ERROR') {
+        this.handleCriticalFailure('CAMERA_ERROR', `Optical sensor failure: ${cam.error}`);
+        return;
+      }
+
+      // Check 4: Critical Low Battery
+      if (telem.batteryPercent > 0 && telem.batteryPercent < 15 && this.currentState !== 'LOW_BATTERY' && this.currentState !== 'RTL' && this.currentState !== 'RETURNING_HOME') {
+        this.handleCriticalFailure('LOW_BATTERY', 'Critical Low Battery (<15%). Emergency RTL initiated.');
+        return;
+      }
+    }, 1000);
+  }
+
+  /**
+   * Safe Failsafe Failure Handler:
+   * Stops autonomous search, alerts operator, and executes automatic RTL once if enabled.
+   */
+  private handleCriticalFailure(failureState: MissionState, reason: string) {
+    searchEngine.stopSearch(reason);
+    this.transitionTo(failureState, reason);
+    audioService.playRtlAlert();
+    audioService.triggerHaptic('warning');
+
+    if (this.missionConfig.autoRtlOnCriticalFailure && !this.rtlCommandSent) {
+      this.rtlCommandSent = true;
+      this.commandAuthority = 'RTL';
+      this.transitionTo('RTL_REQUESTED', `Automatic RTL on Critical Failure enabled. Requesting MAVLink RTL (Reason: ${reason})...`);
+      
+      mavlinkService.commandRTL();
+      this.persistState();
+
+      setTimeout(() => {
+        this.transitionTo('RTL', 'MAVLink RTL Active: Aircraft returning to Home Reference.');
+        setTimeout(() => {
+          this.transitionTo('RETURNING_HOME', 'Airborne RTL transit in progress.');
+        }, 2000);
+      }, 1000);
+    }
+  }
+
+  // --- COMMAND AUTHORITY & MODE SWITCHING ---
+
+  public getCommandAuthority(): FlightCommandAuthority {
+    return this.commandAuthority;
+  }
+
+  public subscribeAuthority(fn: AuthorityListener): () => void {
+    this.authorityListeners.add(fn);
+    fn(this.commandAuthority);
+    return () => this.authorityListeners.delete(fn);
+  }
+
+  private notifyAuthority() {
+    this.authorityListeners.forEach((fn) => fn(this.commandAuthority));
+  }
+
+  /**
+   * Transition from Autonomous Mode -> Manual Control Backup:
+   * 1. Pauses autonomous mission & search engine
+   * 2. Releases autonomous navigation commands
+   * 3. Transfers command authority to MANUAL
+   * 4. Puts flight controller in LOITER / POSHOLD
+   */
+  public switchToManualControl(): { success: boolean; message: string } {
+    if (this.commandAuthority === 'MANUAL') {
+      return { success: true, message: 'Already in Manual Control mode' };
+    }
+
+    // 1. Pause autonomous search
+    searchEngine.pauseSearch('Manual operator takeover initiated');
+
+    // 2. Transfer Command Authority to MANUAL
+    this.commandAuthority = 'MANUAL';
+    this.notifyAuthority();
+
+    // 3. Command FC Position Hold / Loiter to prevent drifting
+    mavlinkService.commandHold();
+
+    // 4. Update Mission State
+    this.transitionTo(
+      'MANUAL_CONTROL',
+      'Autonomous flight commands paused & released. Manual Backup Control active.'
+    );
+
+    audioService.playBeep(600, 100);
+    audioService.triggerHaptic('medium');
+    this.persistState();
+
+    return { success: true, message: 'Switched to Manual Control' };
+  }
+
+  /**
+   * Transition from Manual Backup -> Autonomous Mode:
+   * 1. Performs 5-point verification (GPS, MAVLink, Heartbeat, Altitude, Search Boundary)
+   * 2. Recalculates / safely resumes search path from drone's current position
+   * 3. Transfers command authority to AUTONOMOUS
+   */
+  public switchToAutonomousControl(): { success: boolean; errors?: string[] } {
+    const telem = mavlinkService.getTelemetry();
+    const conn = mavlinkService.getConnectionState();
+
+    const errors: string[] = [];
+
+    // Verification 1: GPS Lock
+    if (!telem.gps.isLocked || telem.gps.satellites < 6) {
+      errors.push(`GPS Not Locked (${telem.gps.satellites} Sats)`);
+    }
+
+    // Verification 2: MAVLink Connected
+    if (!conn.isConnected && !conn.isUsbConnected && conn.connectionType !== 'SIMULATED') {
+      errors.push('MAVLink Link Offline');
+    }
+
+    // Verification 3: Heartbeat Stream
+    if (conn.heartbeatHz < 0.5 && (Date.now() - conn.lastHeartbeat > 4000) && conn.connectionType !== 'SIMULATED') {
+      errors.push('Heartbeat Stream Unhealthy');
+    }
+
+    // Verification 4: Altitude Check
+    if (telem.altitude < 1.5 && telem.isArmed) {
+      errors.push(`Altitude too low for search (${telem.altitude.toFixed(1)}m < 1.5m)`);
+    }
+
+    // Verification 5: Search Boundary Valid
+    if (!this.missionConfig.searchBoundary || !this.missionConfig.searchBoundary.coordinates?.length) {
+      errors.push('Search Boundary unconfigured');
+    }
+
+    if (errors.length > 0) {
+      audioService.playBeep(300, 300, 'sawtooth');
+      return { success: false, errors };
+    }
+
+    // Release Manual & Transfer Authority to AUTONOMOUS
+    this.commandAuthority = 'AUTONOMOUS';
+    this.notifyAuthority();
+
+    // Reinitialize / resume search path from current position
+    this.transitionTo(
+      'SEARCHING',
+      `Manual control released. Autonomous ${this.missionConfig.searchAlgorithm} search resumed from current UAV position (${telem.latitude.toFixed(5)}, ${telem.longitude.toFixed(5)}).`
+    );
+
+    searchEngine.resumeSearch('Resumed from Manual Backup');
+    mavlinkService.commandStartSearch();
+
+    audioService.playBeep(880, 100);
+    audioService.triggerHaptic('success');
+    this.persistState();
+
+    return { success: true };
+  }
+
+  // --- STATE ACCESSORS & CONFIG ---
 
   public subscribeState(fn: MissionStateListener) {
     this.stateListeners.add(fn);
@@ -228,7 +588,7 @@ class MissionEngine {
   }
 
   public setMissionDuration(seconds: number): void {
-    if (this.currentState === 'IDLE' || this.currentState === 'HOME_SET' || this.currentState === 'READY') {
+    if (this.currentState === 'IDLE' || this.currentState === 'HOME_SET' || this.currentState === 'READY' || this.currentState === 'CONFIGURING') {
       const validSeconds = Math.max(10, Math.min(3600, seconds));
       this.missionDurationLimitSec = validSeconds;
       this.remainingSeconds = validSeconds;
@@ -243,32 +603,196 @@ class MissionEngine {
     return this.currentQRData;
   }
 
-  // Pre-Flight Validation Check
-  public checkPreFlight(): { isReady: boolean; checklist: PreFlightChecklist } {
+  public getMissionConfig(): AutonomousMissionConfig {
+    return { ...this.missionConfig };
+  }
+
+  public updateMissionConfig(partial: Partial<AutonomousMissionConfig>): void {
+    this.missionConfig = {
+      ...this.missionConfig,
+      ...partial,
+      searchBoundary: {
+        ...this.missionConfig.searchBoundary,
+        ...(partial.searchBoundary || {})
+      }
+    };
+    this.persistAutonomousConfig();
+    this.notifyState();
+  }
+
+  public validateAltitude(alt: number): { valid: boolean; reason?: string } {
+    if (typeof alt !== 'number' || isNaN(alt) || !isFinite(alt)) {
+      return { valid: false, reason: 'Altitude must be a valid numeric value' };
+    }
+    if (alt < 2) {
+      return { valid: false, reason: 'Search altitude must be at least 2.0 meters for safe propeller clearance' };
+    }
+    if (alt > 100) {
+      return { valid: false, reason: 'Search altitude cannot exceed 100 meters per UAV safety regulations' };
+    }
+    return { valid: true };
+  }
+
+  public updateSearchAltitude(newAltitude: number): { success: boolean; error?: string } {
+    const check = this.validateAltitude(newAltitude);
+    if (!check.valid) {
+      return { success: false, error: check.reason };
+    }
+
+    const prevAltitude = this.missionConfig.searchAltitude;
+    this.missionConfig.searchAltitude = newAltitude;
+    this.persistAutonomousConfig();
+
+    const isAirborne =
+      this.currentState === 'TAKEOFF' ||
+      this.currentState === 'CLIMBING' ||
+      this.currentState === 'CLIMBING_TO_ALTITUDE' ||
+      this.currentState === 'ALTITUDE_STABILIZING' ||
+      this.currentState === 'ALTITUDE_UPDATING' ||
+      this.currentState === 'SEARCHING' ||
+      this.currentState === 'OBJECT_DETECTED' ||
+      this.currentState === 'INSPECTING' ||
+      this.currentState === 'QR_DETECTED' ||
+      this.currentState === 'QR_SCANNING';
+
+    if (isAirborne && this.commandAuthority === 'AUTONOMOUS') {
+      this.transitionTo(
+        'ALTITUDE_UPDATING',
+        `Target altitude updated: ${prevAltitude}m → ${newAltitude}m. Smooth climb/descent initiated.`
+      );
+      mavlinkService.setTargetAltitude(newAltitude);
+      audioService.playBeep(650, 120);
+    } else {
+      audioService.playBeep(880, 80);
+    }
+
+    this.notifyState();
+    return { success: true };
+  }
+
+  public validateMission(): AutonomousMissionValidation {
     const telemetry = mavlinkService.getTelemetry();
     const home = mavlinkService.getHomePoint();
     const conn = mavlinkService.getConnectionState();
-    const runner = runnerCommService.getState();
-    const requiresGps = mavlinkService.isModePositionDependent(telemetry.flightMode);
+    const altCheck = this.validateAltitude(this.missionConfig.searchAltitude);
 
-    const checklist: PreFlightChecklist = {
-      droneConnected: telemetry.pixhawkConnected,
-      pixhawkConnected: conn.isConnected,
-      mavlinkAvailable: conn.isConnected && conn.bytesReceived >= 0,
-      gpsAvailable: requiresGps ? (telemetry.gps.isLocked && telemetry.gps.satellites >= 6) : true,
-      homePointValid: requiresGps ? (home.isSet && home.latitude !== 0) : true,
-      batterySufficient: telemetry.batteryPercent >= 20 || (telemetry.batteryVoltage > 0 && telemetry.batteryVoltage >= 10.5),
-      cameraAvailable: telemetry.cameraReady,
-      qrScannerAvailable: true,
-      runnerConnectionAvailable: runner.isConnected,
-      missionTimerReady: this.remainingSeconds > 0
+    const isFcConnected = Boolean(telemetry.pixhawkConnected || conn.isConnected || conn.isUsbConnected);
+    const isMavlinkConnected = Boolean(conn.isConnected && (conn.bytesReceived > 0 || conn.isUsbConnected || conn.connectionType === 'SIMULATED'));
+    const isHeartbeatHealthy = Boolean(
+      conn.isReceivingTelemetry ||
+      conn.heartbeatHz >= 0.5 ||
+      (conn.lastHeartbeat > 0 && Date.now() - conn.lastHeartbeat < 4000) ||
+      conn.connectionType === 'SIMULATED'
+    );
+    const isGpsAvailable = Boolean(telemetry.gps.isLocked && telemetry.gps.satellites >= 6 && (telemetry.gps.hdop <= 2.5 || telemetry.gps.hdop === 0));
+    const isHomeAvailable = Boolean(home.isSet && home.latitude !== 0 && home.longitude !== 0);
+    const isSearchAltValid = altCheck.valid;
+    const isBoundaryValid = Boolean(
+      this.missionConfig.searchBoundary &&
+      (this.missionConfig.searchBoundary.coordinates?.length >= 3 ||
+        (this.missionConfig.searchBoundary.type === 'CIRCLE' && (this.missionConfig.searchBoundary.circleRadiusMeters || 0) > 0))
+    );
+    const isAlgorithmSelected = Boolean(this.missionConfig.searchAlgorithm);
+    const isCameraAvailable = Boolean(telemetry.cameraReady);
+
+    const conditions: MissionPreFlightCondition[] = [
+      {
+        id: 'fc_connected',
+        label: 'Flight Controller Connected',
+        passed: isFcConnected,
+        detail: isFcConnected ? 'Pixhawk FC Detected' : 'Pixhawk FC Offline / Disconnected',
+        severity: isFcConnected ? 'ok' : 'error'
+      },
+      {
+        id: 'mavlink_connected',
+        label: 'MAVLink Connected',
+        passed: isMavlinkConnected,
+        detail: isMavlinkConnected ? 'MAVLink Protocol Stream Active' : 'No MAVLink Packet Flow',
+        severity: isMavlinkConnected ? 'ok' : 'error'
+      },
+      {
+        id: 'heartbeat_healthy',
+        label: 'Heartbeat Healthy',
+        passed: isHeartbeatHealthy,
+        detail: isHeartbeatHealthy ? `${conn.heartbeatHz.toFixed(1)} Hz Heartbeat Stream` : 'Heartbeat Lost (>4s)',
+        severity: isHeartbeatHealthy ? 'ok' : 'error'
+      },
+      {
+        id: 'gps_available',
+        label: 'GPS Available',
+        passed: isGpsAvailable,
+        detail: isGpsAvailable ? `3D Fix (${telemetry.gps.satellites} Sats, HDOP ${telemetry.gps.hdop.toFixed(1)})` : 'GPS Not Locked (<6 Sats)',
+        severity: isGpsAvailable ? 'ok' : 'error'
+      },
+      {
+        id: 'home_available',
+        label: 'Home Position Available',
+        passed: isHomeAvailable,
+        detail: isHomeAvailable ? `Locked at ${home.latitude.toFixed(5)}, ${home.longitude.toFixed(5)}` : 'Home Point Not Set',
+        severity: isHomeAvailable ? 'ok' : 'error'
+      },
+      {
+        id: 'search_alt_valid',
+        label: 'Search Altitude Valid',
+        passed: isSearchAltValid,
+        detail: isSearchAltValid ? `Configured: ${this.missionConfig.searchAltitude}m (Safe envelope: 2-100m)` : (altCheck.reason || 'Invalid Altitude'),
+        severity: isSearchAltValid ? 'ok' : 'error'
+      },
+      {
+        id: 'search_boundary_valid',
+        label: 'Search Boundary Valid',
+        passed: isBoundaryValid,
+        detail: isBoundaryValid ? `${this.missionConfig.searchBoundary.type} (${this.missionConfig.searchBoundary.coordinates.length} pts, ~${Math.round(this.missionConfig.searchBoundary.areaSquareMeters || 6400)} m²)` : 'No Valid Boundary Drawn',
+        severity: isBoundaryValid ? 'ok' : 'error'
+      },
+      {
+        id: 'algorithm_selected',
+        label: 'Search Algorithm Selected',
+        passed: isAlgorithmSelected,
+        detail: isAlgorithmSelected ? `Pattern: ${this.missionConfig.searchAlgorithm.replace('_', ' ')}` : 'Algorithm Unselected',
+        severity: isAlgorithmSelected ? 'ok' : 'error'
+      },
+      {
+        id: 'camera_available',
+        label: 'Camera Available',
+        passed: isCameraAvailable,
+        detail: isCameraAvailable ? 'Optical Sensor & Stream Ready' : 'Camera Feed Not Initialized',
+        severity: isCameraAvailable ? 'ok' : 'error'
+      }
+    ];
+
+    const allPassed = conditions.every((c) => c.passed);
+    const errors = conditions.filter((c) => !c.passed).map((c) => `${c.label}: ${c.detail}`);
+
+    return {
+      isValid: allPassed,
+      conditions,
+      allPassed,
+      errors
     };
-
-    const isReady = Object.values(checklist).every((val) => val === true);
-    return { isReady, checklist };
   }
 
-  // Set Home Point action
+  public checkPreFlight(): { isReady: boolean; checklist: PreFlightChecklist } {
+    const val = this.validateMission();
+    const telemetry = mavlinkService.getTelemetry();
+    const runner = runnerCommService.getState();
+
+    const checklist: PreFlightChecklist = {
+      droneConnected: val.conditions.find(c => c.id === 'fc_connected')?.passed ?? false,
+      pixhawkConnected: val.conditions.find(c => c.id === 'fc_connected')?.passed ?? false,
+      mavlinkAvailable: val.conditions.find(c => c.id === 'mavlink_connected')?.passed ?? false,
+      gpsAvailable: val.conditions.find(c => c.id === 'gps_available')?.passed ?? false,
+      homePointValid: val.conditions.find(c => c.id === 'home_available')?.passed ?? false,
+      batterySufficient: telemetry.batteryPercent >= 20 || (telemetry.batteryVoltage > 0 && telemetry.batteryVoltage >= 10.5),
+      cameraAvailable: val.conditions.find(c => c.id === 'camera_available')?.passed ?? false,
+      qrScannerAvailable: true,
+      runnerConnectionAvailable: runner.isConnected,
+      missionTimerReady: this.remainingSeconds > 0 && val.isValid
+    };
+
+    return { isReady: val.isValid, checklist };
+  }
+
   public setHomePoint(): boolean {
     const home = mavlinkService.setHomePoint();
     if (home.isSet) {
@@ -281,16 +805,21 @@ class MissionEngine {
   }
 
   /**
-   * Start Mission with Strict Pixhawk FC Motor Start Acknowledgment Gate
-   * Will NOT start mission timer or assume takeoff until FC confirms Motors Started & Armed!
+   * Start Autonomous Mission:
+   * Sets command authority to AUTONOMOUS, arms Pixhawk, and automatically commands climb.
    */
   public startMission(): boolean {
-    const { isReady } = this.checkPreFlight();
-    const safety = mavlinkService.evaluatePreArmSafety();
-
-    if (!isReady || !safety.passed) {
+    const validation = this.validateMission();
+    if (!validation.isValid) {
       audioService.playBeep(300, 300, 'sawtooth');
-      console.warn('Cannot start mission: Safety check failed', safety.reason);
+      console.warn('Cannot start mission: Pre-flight validation failed', validation.errors);
+      return false;
+    }
+
+    const safety = mavlinkService.evaluatePreArmSafety();
+    if (!safety.passed) {
+      audioService.playBeep(300, 300, 'sawtooth');
+      console.warn('Cannot start mission: Pre-arm safety check failed', safety.reason);
       return false;
     }
 
@@ -301,6 +830,11 @@ class MissionEngine {
     this.runnerAckLatencyMs = 0;
     this.elapsedSeconds = 0;
     this.remainingSeconds = this.missionDurationLimitSec;
+    this.rtlCommandSent = false;
+
+    // Set Command Authority to AUTONOMOUS
+    this.commandAuthority = 'AUTONOMOUS';
+    this.notifyAuthority();
 
     // Step 1: Request Arming from Pixhawk
     this.isAwaitingFcMotorStart = true;
@@ -309,10 +843,8 @@ class MissionEngine {
     audioService.playBeep(784, 120);
     audioService.triggerHaptic('medium');
 
-    // Transmit MAVLink Arm Command to Pixhawk
     mavlinkService.sendArmCommand();
 
-    // 8-Second Safety Timeout if FC fails to start motors
     if (this.armingTimeoutTimer) clearTimeout(this.armingTimeoutTimer);
     this.armingTimeoutTimer = setTimeout(() => {
       if (this.isAwaitingFcMotorStart) {
@@ -323,9 +855,6 @@ class MissionEngine {
     return true;
   }
 
-  /**
-   * Called ONLY when Pixhawk Flight Controller confirms Motors are spinning & Armed
-   */
   private onFcMotorsStartedConfirmed() {
     if (!this.isAwaitingFcMotorStart) return;
     this.isAwaitingFcMotorStart = false;
@@ -335,17 +864,20 @@ class MissionEngine {
     this.startMasterTimer();
     this.persistState();
 
-    this.transitionTo('TAKEOFF', 'Pixhawk FC confirmed: Motors Started & Armed ✓. Ascending to 20m.');
-    mavlinkService.commandTakeoff(20);
+    const targetAlt = this.missionConfig.searchAltitude;
+    this.transitionTo(
+      'CLIMBING',
+      `Pixhawk FC confirmed: Motors Started & Armed ✓. Automatic climb commanded to target altitude: ${targetAlt}m.`
+    );
+    mavlinkService.commandTakeoff(targetAlt);
   }
 
-  /**
-   * Called if Pixhawk Flight Controller rejects arming
-   */
   private onFcArmingRejected(reason: string) {
     this.isAwaitingFcMotorStart = false;
     if (this.armingTimeoutTimer) clearTimeout(this.armingTimeoutTimer);
     if (this.timerInterval) clearInterval(this.timerInterval);
+    this.commandAuthority = 'NONE';
+    this.notifyAuthority();
 
     this.transitionTo('IDLE', `Mission Aborted: ${reason}`);
     audioService.playBeep(300, 400, 'sawtooth');
@@ -354,7 +886,8 @@ class MissionEngine {
 
   // Handle Target QR Detected while Airborne
   public handleQRDetected(data: DecodedQRData) {
-    if (this.currentState !== 'SEARCHING' && this.currentState !== 'QR_DETECTED') {
+    if (this.commandAuthority !== 'AUTONOMOUS') return;
+    if (this.currentState !== 'SEARCHING' && this.currentState !== 'QR_DETECTED' && this.currentState !== 'OBJECT_DETECTED') {
       return;
     }
 
@@ -364,7 +897,7 @@ class MissionEngine {
     setTimeout(() => {
       this.transitionTo('QR_SCANNING', 'Airborne position hold. High-framerate decoding active.');
       setTimeout(() => {
-        this.transitionTo('QR_DECODED', `QR Decoded: [${data.code}]. Verified 2-digit format.`);
+        this.transitionTo('DATA_CONFIRMED', `QR Decoded ✓: [${data.code}]. Verified 2-digit format.`);
         this.dispatchCodeToRunner(data.code);
       }, 500);
     }, 300);
@@ -387,32 +920,65 @@ class MissionEngine {
     }, this.ackTimeoutLimitSec * 1000);
   }
 
+  /**
+   * Successful Mission -> Automatic RTL Flow:
+   * QR DATA CONFIRMED -> STOP SEARCH -> MISSION COMPLETE -> COMMAND RTL -> RETURN TO HOME
+   */
   public handleRunnerAckReceived(latencyMs: number) {
     if (this.waitingForAckTimer) clearTimeout(this.waitingForAckTimer);
     this.runnerAckReceived = true;
     this.runnerAckLatencyMs = latencyMs;
 
-    this.transitionTo('RUNNER_CONFIRMED', `Runner Acknowledged: Target [${this.currentQRData?.code}] confirmed (${latencyMs}ms). Initiating RTL.`);
     audioService.playRunnerAck();
     audioService.triggerHaptic('success');
     this.persistState();
 
-    setTimeout(() => {
-      this.transitionTo('RTL', 'Sending MAVLink RTL command to Pixhawk flight controller.');
-      mavlinkService.commandRTL();
+    // 1. Stop Autonomous Search
+    searchEngine.stopSearch('Mission Target Confirmed');
+
+    if (this.missionConfig.rtlOnQrConfirmation) {
+      this.transitionTo(
+        'MISSION_COMPLETE',
+        `Runner Acknowledged: Target [${this.currentQRData?.code}] confirmed (${latencyMs}ms). MISSION COMPLETE ✓.`
+      );
+
       setTimeout(() => {
-        this.transitionTo('RETURNING_HOME', 'Airborne Return-To-Launch at 25m altitude.');
+        // 2. Transfer Command Authority to RTL
+        this.commandAuthority = 'RTL';
+        this.notifyAuthority();
+        this.rtlCommandSent = true;
+
+        this.transitionTo('RTL_REQUESTED', 'Requesting MAVLink RTL through Pixhawk flight controller...');
+        mavlinkService.commandRTL();
+
         setTimeout(() => {
-          this.transitionTo('LANDING', 'Descending at Home coordinates.');
-          mavlinkService.commandLand();
-        }, 3000);
-      }, 2000);
-    }, 1200);
+          this.transitionTo('RTL', 'MAVLink RTL Active: Flight controller guiding aircraft back to Home Reference.');
+          setTimeout(() => {
+            this.transitionTo('RETURNING_HOME', 'Airborne return in progress.');
+          }, 2000);
+        }, 1200);
+      }, 1500);
+    } else {
+      this.transitionTo(
+        'MISSION_COMPLETE',
+        `Runner Acknowledged: Target [${this.currentQRData?.code}] confirmed (${latencyMs}ms). MISSION COMPLETE ✓. Holding position over target.`
+      );
+    }
   }
 
+  /**
+   * Manual or Emergency RTL Trigger:
+   * Transfers Command Authority to RTL and commands flight controller Return-To-Launch.
+   */
   public triggerEmergencyRTL(reason: string = 'Manual Operator Emergency RTL Command') {
     if (this.waitingForAckTimer) clearTimeout(this.waitingForAckTimer);
-    this.transitionTo('EMERGENCY_RTL', reason);
+    searchEngine.stopSearch(reason);
+
+    this.commandAuthority = 'RTL';
+    this.notifyAuthority();
+    this.rtlCommandSent = true;
+
+    this.transitionTo('RTL_REQUESTED', reason);
     audioService.playRtlAlert();
     audioService.triggerHaptic('warning');
 
@@ -420,9 +986,11 @@ class MissionEngine {
     this.persistState();
 
     setTimeout(() => {
-      mavlinkService.commandLand();
-      this.finalizeMission('ABORTED');
-    }, 4000);
+      this.transitionTo('RTL', 'MAVLink RTL Active: Returning to Home.');
+      setTimeout(() => {
+        this.transitionTo('RETURNING_HOME', 'Airborne RTL in progress.');
+      }, 2000);
+    }, 1000);
   }
 
   private handleMissionTimeout() {
@@ -483,8 +1051,9 @@ class MissionEngine {
     storageService.saveMissionLog(logEntry);
     this.clearPersistentState();
     this.currentMissionNumber++;
+    this.commandAuthority = 'NONE';
+    this.notifyAuthority();
 
-    this.transitionTo('MISSION_COMPLETE', `Mission #${logEntry.missionNumber} Complete. Log saved.`);
     audioService.playMissionComplete();
   }
 
@@ -497,6 +1066,9 @@ class MissionEngine {
     if (this.waitingForAckTimer) clearTimeout(this.waitingForAckTimer);
     if (this.armingTimeoutTimer) clearTimeout(this.armingTimeoutTimer);
     this.isAwaitingFcMotorStart = false;
+    this.rtlCommandSent = false;
+    this.commandAuthority = 'NONE';
+    this.notifyAuthority();
 
     this.currentState = 'IDLE';
     this.remainingSeconds = this.missionDurationLimitSec;

@@ -265,6 +265,7 @@ class MAVLinkService {
     }
 
     if (phase === 'DISCONNECTED') {
+      this.stopGcsHeartbeat();
       this.connectionState.phase = 'DISCONNECTED';
       this.connectionState.isConnected = false;
       this.connectionState.isUsbConnected = false;
@@ -275,9 +276,10 @@ class MAVLinkService {
       this.telemetry.isArmed = false;
       this.clearHeartbeatWaitTimer();
       this.clearSerialDataCheckTimer();
-      this.logDiagnostic('USB', message || 'USB Device Disconnected', 'warn');
-      this.addStatusMessage('WARNING', 4, message || 'USB Device Disconnected');
+      this.logDiagnostic('USB', message || 'Device Disconnected', 'warn');
+      this.addStatusMessage('WARNING', 4, message || 'Device Disconnected');
     } else if (phase === 'CONNECTION_LOST') {
+      this.stopGcsHeartbeat();
       this.connectionState.phase = 'CONNECTION_LOST';
       this.connectionState.isConnected = false;
       this.connectionState.isUsbConnected = false;
@@ -288,8 +290,16 @@ class MAVLinkService {
       this.telemetry.isArmed = false;
       this.clearHeartbeatWaitTimer();
       this.clearSerialDataCheckTimer();
-      this.logDiagnostic('USB', 'Pixhawk connection lost. Waiting for USB device reconnection…', 'warn');
-      this.addStatusMessage('WARNING', 4, 'Pixhawk connection lost (USB cable disconnected)');
+      this.logDiagnostic('USB', 'Link connection lost. Waiting for reconnection…', 'warn');
+      this.addStatusMessage('WARNING', 4, 'Link connection lost');
+    } else if (phase === 'WAITING_FOR_MAVLINK') {
+      this.stopGcsHeartbeat();
+      this.clearHeartbeatWaitTimer();
+      this.connectionState.phase = 'WAITING_FOR_MAVLINK';
+      this.connectionState.isConnected = false;
+      this.connectionState.isUsbConnected = false;
+      this.connectionState.isReceivingTelemetry = false;
+      this.connectionState.phaseMessage = message;
     } else if (phase === 'USB_DEVICE_DETECTED') {
       this.connectionState.phase = 'USB_DEVICE_DETECTED';
       this.connectionState.isRealHardware = true;
@@ -308,13 +318,13 @@ class MAVLinkService {
       this.addStatusMessage('INFO', 6, 'USB permission granted');
     } else if (phase === 'SERIAL_OPENING' || phase === 'OPENING_USB') {
       this.connectionState.phase = 'SERIAL_OPENING';
-      this.logDiagnostic('USB', '[USB] Opening serial connection…', 'info');
+      this.logDiagnostic('USB', '[USB] Opening serial/network connection…', 'info');
     } else if (phase === 'SERIAL_OPEN' || phase === 'USB_CONNECTED') {
       this.connectionState.isUsbConnected = true;
       this.connectionState.phase = 'SERIAL_OPEN';
-      this.connectionState.phaseMessage = 'Serial port opened. Testing serial data…';
-      this.logDiagnostic('USB', `[USB] Serial port opened @ ${this.connectionState.baudRate} baud. Testing serial data…`, 'success');
-      this.addStatusMessage('INFO', 6, 'Serial port opened. Testing serial data…');
+      this.connectionState.phaseMessage = message || 'Link opened. Testing serial/network data…';
+      this.logDiagnostic('USB', `Link opened @ ${this.connectionState.baudRate} baud. Testing data streams…`, 'success');
+      this.addStatusMessage('INFO', 6, 'Link opened. Testing data streams…');
 
       this.startGcsHeartbeat();
       this.requestMavlinkDataStreams();
@@ -328,6 +338,7 @@ class MAVLinkService {
       phase === 'INTERFACE_NOT_SUPPORTED' ||
       phase === 'IOS_UNSUPPORTED'
     ) {
+      this.stopGcsHeartbeat();
       this.connectionState.phase = phase;
       this.connectionState.isUsbConnected = false;
       this.connectionState.isConnected = false;
@@ -337,6 +348,17 @@ class MAVLinkService {
       this.clearSerialDataCheckTimer();
       this.logDiagnostic('ERROR', `[ERROR] ${message}`, 'error');
       this.addStatusMessage('ERROR', 3, message);
+    }
+
+    // Synchronize ESP32 WebSocket Link State if currently on ESP32
+    if (this.connectionState.connectionType === 'ESP32_WEBSOCKET') {
+      const esp32Transport = transportManager.getEsp32Transport();
+      this.connectionState.esp32LinkState = esp32Transport.getLinkState();
+      this.connectionState.esp32ProtocolMode = esp32Transport.getProtocolMode();
+      this.connectionState.esp32Path = esp32Transport.getPath();
+      this.connectionState.esp32LatencyMs = esp32Transport.getLatencyMs();
+      this.connectionState.esp32ErrorCategory = esp32Transport.getErrorCategory();
+      this.connectionState.esp32ErrorMessage = esp32Transport.getLastErrorMessage();
     }
 
     this.notifyConnection();
@@ -562,12 +584,14 @@ class MAVLinkService {
 
   /**
    * 1-Click ESP32-S3 Wireless Bridge Connection (WebSocket)
-   * Supports explicit LOCAL (ws://) and SECURE (wss://) connection modes.
+   * Supports AUTO (protocol negotiation), direct WS, and WSS connection modes.
    */
   public async connectEsp32(options?: {
+    protocolMode?: 'AUTO' | 'WS' | 'WSS';
     mode?: 'LOCAL' | 'SECURE';
     host?: string;
     port?: number;
+    path?: string;
     secureEndpoint?: string;
     protocol?: 'ws' | 'wss';
     baudRate?: number;
@@ -579,9 +603,11 @@ class MAVLinkService {
     }
 
     let resolvedOptions: {
+      protocolMode: 'AUTO' | 'WS' | 'WSS';
       mode: 'LOCAL' | 'SECURE';
       host: string;
       port: number;
+      path: string;
       secureEndpoint: string;
       protocol: 'ws' | 'wss';
       baudRate: number;
@@ -590,28 +616,35 @@ class MAVLinkService {
 
     if (typeof options === 'string') {
       // Legacy string overload: connectEsp32(host, port, protocol, baudRate)
+      const pMode: 'AUTO' | 'WS' | 'WSS' = protocol === 'wss' ? 'WSS' : 'WS';
       resolvedOptions = {
+        protocolMode: pMode,
         mode: protocol === 'wss' ? 'SECURE' : 'LOCAL',
         host: options.trim(),
         port,
+        path: '/ws',
         secureEndpoint: `${options}:${port}`,
         protocol,
         baudRate,
         wifiSsid: transportManager.getEsp32Transport().getWifiSsid()
       };
     } else {
-      const mode = options?.mode || 'LOCAL';
-      const host = (options?.host && options.host !== '192.168.4.1' ? options.host : '192.168.31.194').trim();
+      const protocolMode = options?.protocolMode || (options?.mode === 'SECURE' ? 'WSS' : 'AUTO');
+      const mode = options?.mode || (protocolMode === 'WSS' ? 'SECURE' : 'LOCAL');
+      const host = (options?.host && options.host.trim().length > 0 ? options.host.trim() : '192.168.31.194');
       const p = options?.port || 8080;
-      const secureEp = (options?.secureEndpoint || 'relay.example.com:8443').trim();
-      const proto = options?.protocol || (mode === 'SECURE' ? 'wss' : 'ws');
+      const path = options?.path !== undefined ? options.path.trim() : '/ws';
+      const secureEp = (options?.secureEndpoint || 'relay.drone-gcs.com:8443').trim();
+      const proto = options?.protocol || (protocolMode === 'WSS' ? 'wss' : 'ws');
       const baud = options?.baudRate || 57600;
       const ssid = options?.wifiSsid || transportManager.getEsp32Transport().getWifiSsid();
 
       resolvedOptions = {
+        protocolMode,
         mode,
         host,
         port: p,
+        path,
         secureEndpoint: secureEp,
         protocol: proto,
         baudRate: baud,
@@ -619,19 +652,21 @@ class MAVLinkService {
       };
     }
 
-    const resolvedUrl = resolvedOptions.mode === 'SECURE'
-      ? `wss://${resolvedOptions.secureEndpoint.replace(/^wss?:\/\//i, '')}`
-      : `ws://${resolvedOptions.host}:${resolvedOptions.port}`;
+    transportManager.getEsp32Transport().setConfig(resolvedOptions);
+    const resolvedUrl = transportManager.getEsp32Transport().getResolvedUrl();
 
     this.connectionState.connectionType = 'ESP32_WEBSOCKET';
     this.connectionState.portOrAddress = resolvedUrl;
     this.connectionState.baudRate = resolvedOptions.baudRate;
     this.connectionState.isRealHardware = true;
     this.connectionState.diagnostics.serialDataReceived = false;
+    this.connectionState.esp32ProtocolMode = resolvedOptions.protocolMode;
+    this.connectionState.esp32Path = resolvedOptions.path;
+    this.connectionState.esp32LinkState = 'CONNECTING';
 
     this.logDiagnostic(
       'TRANSPORT',
-      `[WS] Initiating ${resolvedOptions.mode} bridge connection to ${resolvedUrl} (${resolvedOptions.baudRate} baud)…`,
+      `[WS] Initiating [${resolvedOptions.protocolMode}] bridge connection to ${resolvedUrl} (${resolvedOptions.baudRate} baud)…`,
       'info'
     );
 
@@ -661,8 +696,8 @@ class MAVLinkService {
     this.notifyConnection();
   }
 
-  public async checkEsp32Http(host?: string): Promise<{ reachable: boolean; latencyMs?: number; message?: string }> {
-    return await usbHostService.checkEsp32Http(host);
+  public async checkEsp32Http(host?: string, port?: number): Promise<{ reachable: boolean; latencyMs?: number; message?: string }> {
+    return await usbHostService.checkEsp32Http(host, port);
   }
 
   public async scanUsbDevices(): Promise<any[]> {
@@ -1425,20 +1460,42 @@ class MAVLinkService {
     }
   }
 
-  public async commandTakeoff(targetAltMeters: number = 20): Promise<boolean> {
+  public async commandTakeoff(targetAltMeters: number = 10): Promise<boolean> {
     const isConnected = this.connectionState.isConnected || this.connectionState.isUsbConnected;
     if (!isConnected && !this.simInterval) {
       this.logDiagnostic('ERROR', 'Cannot takeoff: MAVLink not connected', 'error');
       return false;
     }
+    this.telemetry.targetAltitude = targetAltMeters;
     this.addStatusMessage('NOTICE', 5, `Sending Takeoff Command to ${targetAltMeters}m...`);
     if (this.connectionState.isRealHardware || isConnected) {
       await this.sendMavlinkCommandLong(22 /* MAV_CMD_NAV_TAKEOFF */, 0, 0, 0, 0, 0, 0, targetAltMeters);
+      this.notifyTelemetry();
       return true;
     } else {
       this.telemetry.isArmed = true;
       this.telemetry.flightMode = 'AUTO';
       this.telemetry.targetAltitude = targetAltMeters;
+      this.notifyTelemetry();
+      return true;
+    }
+  }
+
+  /**
+   * Controlled Mid-Flight Altitude Update:
+   * Changes the target cruising altitude safely via MAV_CMD_DO_CHANGE_ALTITUDE (186)
+   */
+  public async setTargetAltitude(targetAltMeters: number): Promise<boolean> {
+    const isConnected = this.connectionState.isConnected || this.connectionState.isUsbConnected;
+    this.telemetry.targetAltitude = targetAltMeters;
+    this.addStatusMessage('NOTICE', 5, `Updating Target Altitude to ${targetAltMeters}m...`);
+
+    if (this.connectionState.isRealHardware || isConnected) {
+      // MAV_CMD_DO_CHANGE_ALTITUDE (186): param1 = Target altitude, param2 = Frame (0 = global/default)
+      await this.sendMavlinkCommandLong(186 /* MAV_CMD_DO_CHANGE_ALTITUDE */, targetAltMeters, 0, 0, 0, 0, 0, 0);
+      this.notifyTelemetry();
+      return true;
+    } else {
       this.notifyTelemetry();
       return true;
     }
@@ -1474,7 +1531,8 @@ class MAVLinkService {
       return true;
     } else {
       this.telemetry.flightMode = 'AUTO';
-      this.telemetry.targetAltitude = 25;
+      // Preserve configured target altitude instead of overriding to 25
+      this.telemetry.targetAltitude = this.telemetry.targetAltitude || 10;
       this.generateSearchGridWaypoints();
       this.notifyTelemetry();
       return true;
@@ -1702,10 +1760,19 @@ class MAVLinkService {
       this.connectionState.heartbeatHz = 2.0;
 
       if (this.telemetry.isArmed && this.telemetry.flightMode === 'AUTO') {
-        if (this.telemetry.altitude < (this.telemetry.targetAltitude || 20)) {
+        const targetAlt = this.telemetry.targetAltitude || 10;
+        const diff = +(targetAlt - this.telemetry.altitude).toFixed(1);
+        if (diff > 0.2) {
+          // Climbing automatically
           this.telemetry.altitude = +(this.telemetry.altitude + 0.5).toFixed(1);
           this.telemetry.verticalSpeed = 1.5;
+        } else if (diff < -0.2) {
+          // Descending in controlled manner
+          this.telemetry.altitude = +(this.telemetry.altitude - 0.4).toFixed(1);
+          this.telemetry.verticalSpeed = -1.2;
         } else {
+          // Altitude reached and held
+          this.telemetry.altitude = targetAlt;
           this.telemetry.verticalSpeed = 0.0;
           this.telemetry.groundSpeed = 6.2;
           this.searchProgressCount = Math.min(100, this.searchProgressCount + 1);

@@ -1,30 +1,106 @@
 export type AppRole = 'GROUND_STATION' | 'DRONE' | 'RUNNER' | 'MANUAL' | 'TESTBENCH' | 'SELECT';
 
+export type FlightCommandAuthority = 'AUTONOMOUS' | 'MANUAL' | 'RTL' | 'NONE';
+
 export type MissionState =
   | 'IDLE'
+  | 'CONFIGURING'
   | 'HOME_SET'
   | 'READY'
   | 'STARTING'
   | 'TAKEOFF'
+  | 'CLIMBING'
+  | 'CLIMBING_TO_ALTITUDE'
+  | 'ALTITUDE_STABILIZING'
+  | 'ALTITUDE_UPDATING'
   | 'SEARCHING'
+  | 'OBJECT_DETECTED'
   | 'BOX_DETECTED'
   | 'BOX_TRACKING'
   | 'BOX_CENTERED'
+  | 'INSPECTING'
+  | 'QR_DETECTION'
   | 'QR_DETECTED'
   | 'QR_SCANNING'
   | 'QR_DECODED'
+  | 'DATA_CONFIRMED'
   | 'SEND_TO_RUNNER'
   | 'WAIT_FOR_RUNNER_ACK'
   | 'RUNNER_CONFIRMED'
+  | 'MISSION_COMPLETE'
+  | 'RTL_REQUESTED'
   | 'RTL'
   | 'RETURNING_HOME'
   | 'LANDING'
-  | 'MISSION_COMPLETE'
+  | 'LANDED'
+  | 'ERROR'
+  | 'ABORTED'
+  | 'FAILSAFE'
   | 'EMERGENCY_RTL'
   | 'MISSION_TIMEOUT'
   | 'CONNECTION_LOST'
   | 'GPS_ERROR'
-  | 'LOW_BATTERY';
+  | 'CAMERA_ERROR'
+  | 'BOUNDARY_ERROR'
+  | 'LOW_BATTERY'
+  | 'MANUAL_CONTROL';
+
+export type SearchBoundaryType = 'RECTANGLE' | 'SQUARE' | 'CIRCLE' | 'POLYGON' | 'CUSTOM';
+export type SearchAlgorithmType =
+  | 'GRID'
+  | 'SPIRAL'
+  | 'EXPANDING_SPIRAL'
+  | 'PERIMETER'
+  | 'ADAPTIVE'
+  | 'SECTOR'
+  | 'CONTOUR';
+
+export interface LatLngPoint {
+  lat: number;
+  lng: number;
+}
+
+export interface SearchBoundaryConfig {
+  type: SearchBoundaryType;
+  coordinates: LatLngPoint[];
+  circleCenter?: LatLngPoint;
+  circleRadiusMeters?: number;
+  widthMeters?: number;
+  heightMeters?: number;
+  areaSquareMeters?: number;
+  label?: string;
+}
+
+export interface AutonomousMissionConfig {
+  searchAltitude: number;             // Altitude above home reference (meters, e.g. 10m)
+  searchBoundary: SearchBoundaryConfig;
+  searchAlgorithm: SearchAlgorithmType; // e.g. 'GRID' | 'SPIRAL' | 'PERIMETER' | 'ADAPTIVE'
+  flightSpeedMs: number;              // Target ground speed during search (m/s, e.g. 3.0)
+  gridSpacingMeters: number;          // Lawnmower transect separation (meters, e.g. 5.0)
+  desiredOverlapPercent?: number;     // Camera FOV overlap percent (default 25%)
+  cameraFovHorizontalDeg?: number;    // Camera HFOV degrees (default 70°)
+  cameraFovVerticalDeg?: number;      // Camera VFOV degrees (default 52°)
+  inspectionHoverSeconds?: number;    // Hover duration for target inspection (default 4s)
+  rtlOnQrConfirmation: boolean;       // RTL on QR Confirmation [ON / OFF]
+  autoRtlOnCriticalFailure: boolean;  // Automatic RTL on Critical Failure [ON / OFF]
+  stabilizationSeconds: number;       // Hover duration at target altitude before search (default 2s)
+  altitudeToleranceMeters: number;    // Tolerance band around target altitude (default 0.5m)
+}
+
+export interface MissionPreFlightCondition {
+  id: string;
+  label: string;
+  passed: boolean;
+  detail?: string;
+  severity: 'error' | 'warning' | 'ok';
+}
+
+export interface AutonomousMissionValidation {
+  isValid: boolean;
+  conditions: MissionPreFlightCondition[];
+  allPassed: boolean;
+  errors: string[];
+}
 
 export interface GPSCoordinates {
   latitude: number;

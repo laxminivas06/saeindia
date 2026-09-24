@@ -1,5 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { DroneTelemetry, HomePoint } from '../../types/mission';
+import { missionEngine } from '../../services/missionEngine';
+import { searchEngine } from '../../services/searchEngine';
 import { Compass, Crosshair, MapPin, Maximize2, Shield, Radio } from 'lucide-react';
 
 interface TacticalMapProps {
@@ -66,7 +68,15 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
         ctx.fillText(`${(idx + 1) * 25}m`, centerX + r + 3, centerY - 2);
       });
 
-      // Draw Search Grid Box (Competition Autonomous Search Area)
+      // Draw Search Boundary and Path Waypoints
+      const mCfg = missionEngine.getMissionConfig();
+      const sAlgo = searchEngine.getAlgorithm(mCfg.searchAlgorithm);
+      const footprint = sAlgo.calculateGroundCoverage(
+        mCfg.searchAltitude || 10,
+        { fovHorizontalDeg: 70, fovVerticalDeg: 52, aspectRatio: 16 / 9 },
+        mCfg.desiredOverlapPercent || 25
+      );
+
       const searchBoxWidth = 140;
       const searchBoxHeight = 110;
       const searchBoxX = centerX - 30;
@@ -78,20 +88,55 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({
       ctx.strokeRect(searchBoxX, searchBoxY, searchBoxWidth, searchBoxHeight);
       ctx.setLineDash([]);
 
-      // Search Pattern Lawnmower Lines inside Search Area
-      ctx.strokeStyle = 'rgba(234, 179, 8, 0.18)';
-      ctx.lineWidth = 1;
-      for (let i = 1; i <= 4; i++) {
-        const lineY = searchBoxY + (searchBoxHeight / 5) * i;
-        ctx.beginPath();
-        ctx.moveTo(searchBoxX, lineY);
-        ctx.lineTo(searchBoxX + searchBoxWidth, lineY);
-        ctx.stroke();
-      }
+      // Draw Dynamic Search Lanes based on calculated effective spacing
+      const numLines = Math.max(3, Math.min(8, Math.round(searchBoxHeight / (footprint.effectiveLaneSpacingMeters * 2.2))));
+      const lineStep = searchBoxHeight / (numLines + 1);
 
-      ctx.fillStyle = 'rgba(234, 179, 8, 0.8)';
+      ctx.strokeStyle = mCfg.searchAlgorithm === 'ADAPTIVE'
+        ? 'rgba(16, 185, 129, 0.35)'
+        : mCfg.searchAlgorithm === 'SPIRAL'
+        ? 'rgba(56, 189, 248, 0.35)'
+        : mCfg.searchAlgorithm === 'PERIMETER'
+        ? 'rgba(236, 72, 153, 0.35)'
+        : 'rgba(234, 179, 8, 0.3)';
+      ctx.lineWidth = 1.2;
+      ctx.setLineDash([4, 3]);
+
+      if (mCfg.searchAlgorithm === 'SPIRAL') {
+        ctx.beginPath();
+        let r = 2;
+        const spCenter = { x: searchBoxX + searchBoxWidth / 2, y: searchBoxY + searchBoxHeight / 2 };
+        for (let a = 0; a < 6 * Math.PI; a += 0.2) {
+          r += 0.8;
+          const sx = spCenter.x + Math.cos(a) * r;
+          const sy = spCenter.y + Math.sin(a) * r;
+          if (a === 0) ctx.moveTo(sx, sy);
+          else ctx.lineTo(sx, sy);
+        }
+        ctx.stroke();
+      } else if (mCfg.searchAlgorithm === 'PERIMETER') {
+        for (let ring = 1; ring <= 3; ring++) {
+          const inset = ring * 12;
+          ctx.strokeRect(searchBoxX + inset, searchBoxY + inset, searchBoxWidth - inset * 2, searchBoxHeight - inset * 2);
+        }
+      } else {
+        for (let i = 1; i <= numLines; i++) {
+          const lineY = searchBoxY + lineStep * i;
+          ctx.beginPath();
+          ctx.moveTo(searchBoxX + 4, lineY);
+          ctx.lineTo(searchBoxX + searchBoxWidth - 4, lineY);
+          ctx.stroke();
+        }
+      }
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = 'rgba(234, 179, 8, 0.9)';
       ctx.font = '10px JetBrains Mono, monospace';
-      ctx.fillText('TARGET SEARCH ZONE (100x80m)', searchBoxX + 4, searchBoxY - 5);
+      ctx.fillText(
+        `SEARCH ENGINE: ${mCfg.searchBoundary.type} [${mCfg.searchAlgorithm}] Alt: ${mCfg.searchAltitude}m (${footprint.widthMeters.toFixed(1)}m FOV)`,
+        searchBoxX + 2,
+        searchBoxY - 6
+      );
 
       // Home Point Coordinate (Mapped to Center)
       const homeX = centerX;
