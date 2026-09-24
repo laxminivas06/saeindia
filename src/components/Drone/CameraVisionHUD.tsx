@@ -18,28 +18,36 @@ import {
   Scan,
   ZoomIn,
   ZoomOut,
-  RefreshCw
+  RefreshCw,
+  Power,
+  PowerOff
 } from 'lucide-react';
 
 interface CameraVisionHUDProps {
   onQRDetected?: (data: DecodedQRData) => void;
-  isScanning: boolean;
+  isScanning?: boolean;
   className?: string;
   decodedQR: DecodedQRData | null;
   telemetry?: DroneTelemetry;
+  scannerActive?: boolean;
+  onScannerToggle?: (active: boolean) => void;
 }
 
 export const CameraVisionHUD: React.FC<CameraVisionHUDProps> = ({
   onQRDetected,
-  isScanning,
+  isScanning = false,
   className = '',
   decodedQR,
-  telemetry
+  telemetry,
+  scannerActive,
+  onScannerToggle
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [filterMode, setFilterMode] = useState<VisionFilterMode>('NORMAL');
   const [showFilterMenu, setShowFilterMenu] = useState<boolean>(false);
   const [showZoomSlider, setShowZoomSlider] = useState<boolean>(false);
+  // Requirement: Default state when Drone Core opens: Scanner = OFF. Camera does not activate.
+  const [isScannerOn, setIsScannerOn] = useState<boolean>(scannerActive ?? false);
 
   const [cameraState, setCameraState] = useState<{
     isActive: boolean;
@@ -59,8 +67,31 @@ export const CameraVisionHUD: React.FC<CameraVisionHUDProps> = ({
   const [activeQR, setActiveQR] = useState<DecodedQRData | null>(decodedQR);
   const [showTargetModal, setShowTargetModal] = useState(false);
 
-  const startCameraStream = async () => {
+  // Sync external scannerActive if supplied
+  useEffect(() => {
+    if (scannerActive !== undefined) {
+      setIsScannerOn(scannerActive);
+    }
+  }, [scannerActive]);
+
+  const handleTurnScannerOn = async () => {
+    setIsScannerOn(true);
+    if (onScannerToggle) onScannerToggle(true);
     if (videoRef.current) {
+      await visionService.startCamera(videoRef.current);
+      setCameraState(visionService.getCameraState());
+    }
+  };
+
+  const handleTurnScannerOff = () => {
+    setIsScannerOn(false);
+    if (onScannerToggle) onScannerToggle(false);
+    visionService.stopCamera();
+    setCameraState(visionService.getCameraState());
+  };
+
+  const startCameraStream = async () => {
+    if (videoRef.current && isScannerOn) {
       await visionService.startCamera(videoRef.current);
       setCameraState(visionService.getCameraState());
     }
@@ -69,14 +100,22 @@ export const CameraVisionHUD: React.FC<CameraVisionHUDProps> = ({
   useEffect(() => {
     let mounted = true;
 
-    startCameraStream();
+    // Camera and scanner only activate if user tapped ON
+    if (isScannerOn && videoRef.current) {
+      visionService.startCamera(videoRef.current).then(() => {
+        if (mounted) setCameraState(visionService.getCameraState());
+      });
+    } else {
+      visionService.stopCamera();
+      if (mounted) setCameraState(visionService.getCameraState());
+    }
 
     const unsubscribeCam = visionService.subscribeCameraState((s) => {
       if (mounted) setCameraState(s);
     });
 
     const unsubscribeQR = visionService.subscribeQR((data) => {
-      if (mounted) {
+      if (mounted && isScannerOn) {
         setActiveQR(data);
         if (data && data.isValidTwoDigit) {
           setShowTargetModal(true);
@@ -93,7 +132,7 @@ export const CameraVisionHUD: React.FC<CameraVisionHUDProps> = ({
       unsubscribeQR();
       visionService.stopCamera();
     };
-  }, [onQRDetected]);
+  }, [isScannerOn, onQRDetected]);
 
   useEffect(() => {
     if (decodedQR) {
@@ -208,8 +247,39 @@ export const CameraVisionHUD: React.FC<CameraVisionHUDProps> = ({
         </div>
       </div>
 
+      {/* SCANNER OFF STANDBY OVERLAY (Camera remains deactivated until user taps ON) */}
+      {!isScannerOn && (
+        <div className="absolute inset-0 z-30 bg-slate-950/95 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center space-y-4 font-mono">
+          <div className="w-16 h-16 rounded-full bg-slate-900 border-2 border-slate-700 flex items-center justify-center text-slate-400 shadow-xl">
+            <Scan className="w-8 h-8 text-sky-400" />
+          </div>
+
+          <div className="space-y-1.5 max-w-sm">
+            <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-slate-900 border border-slate-700 text-slate-400 text-xs font-black uppercase">
+              <span className="w-2 h-2 rounded-full bg-slate-500" />
+              <span>SCANNER = OFF</span>
+            </div>
+            <h3 className="text-lg font-black text-white uppercase tracking-wide">
+              DRONE QR SCANNER
+            </h3>
+            <p className="text-xs text-slate-400">
+              Camera and QR detection are turned OFF. Tap ON below to activate the drone camera and start scanning.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleTurnScannerOn}
+            className="px-6 py-3.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white rounded-xl font-black text-sm uppercase tracking-wider transition flex items-center space-x-2.5 shadow-xl shadow-emerald-600/40 cursor-pointer"
+          >
+            <Power className="w-5 h-5" />
+            <span>TURN SCANNER ON</span>
+          </button>
+        </div>
+      )}
+
       {/* One-Time Initial Camera Permission Request Prompt */}
-      {needsPermissionPrompt && (
+      {isScannerOn && needsPermissionPrompt && (
         <div className="absolute inset-0 z-40 bg-slate-950/95 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center space-y-4">
           <div className="w-16 h-16 rounded-full bg-emerald-950/80 border-2 border-emerald-400 flex items-center justify-center text-emerald-300 shadow-xl shadow-emerald-500/20">
             <Camera className="w-8 h-8 animate-pulse" />
@@ -289,8 +359,19 @@ export const CameraVisionHUD: React.FC<CameraVisionHUDProps> = ({
           )}
         </div>
 
-        {/* Right Side: Torch, Theme Selector, Switch Camera */}
+        {/* Right Side: Scanner OFF, Torch, Theme Selector, Switch Camera */}
         <div className="flex items-center space-x-1.5 pointer-events-auto">
+          {/* Explicit Scanner OFF button */}
+          <button
+            type="button"
+            onClick={handleTurnScannerOff}
+            className="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-rose-600/90 hover:bg-rose-500 active:bg-rose-700 text-white border border-rose-400 text-[9px] sm:text-[10px] font-black uppercase flex items-center space-x-1 transition cursor-pointer shadow-lg shadow-rose-600/30"
+            title="Stop QR detection and turn camera OFF"
+          >
+            <PowerOff className="w-3 sm:w-3.5 h-3 sm:h-3.5" />
+            <span>OFF</span>
+          </button>
+
           {/* Torch Toggle */}
           {cameraState.hasTorch && (
             <button

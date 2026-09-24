@@ -183,7 +183,7 @@ class MAVLinkService {
   private searchProgressCount: number = 0;
 
   private startGcsHeartbeat() {
-    if (this.gcsHeartbeatTimer) return;
+    this.stopGcsHeartbeat(); // Clear any existing timer to guarantee single instance
     this.sendGcsHeartbeat();
     this.gcsHeartbeatTimer = setInterval(() => {
       if ((this.connectionState.isUsbConnected || this.connectionState.isConnected) && !this.simInterval) {

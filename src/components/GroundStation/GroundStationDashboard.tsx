@@ -13,6 +13,7 @@ import { TacticalMap } from './TacticalMap';
 import { LiveVideoFeed } from './LiveVideoFeed';
 import { ConnectionStatusDeck } from '../common/ConnectionStatusDeck';
 import { PixhawkConnectionCard } from '../Drone/PixhawkConnectionCard';
+import { missionEngine } from '../../services/missionEngine';
 import {
   Play,
   ShieldAlert,
@@ -22,7 +23,8 @@ import {
   Sliders,
   Cpu,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Clock
 } from 'lucide-react';
 
 interface GroundStationDashboardProps {
@@ -61,11 +63,35 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
   const [armFeedback, setArmFeedback] = useState<string | null>(null);
   const [showHardware, setShowHardware] = useState(false);
 
+  const configuredSecs = missionEngine.getMissionDurationSeconds();
+  const [selectedDuration, setSelectedDuration] = useState<number>(configuredSecs);
+  const [isCustom, setIsCustom] = useState<boolean>(![60, 120, 180, 300, 600].includes(configuredSecs));
+  const [customMinutes, setCustomMinutes] = useState<string>(
+    ![60, 120, 180, 300, 600].includes(configuredSecs) ? String(Math.round(configuredSecs / 60) || 1) : '4'
+  );
+
   const isMissionActive =
     missionState !== 'IDLE' &&
     missionState !== 'HOME_SET' &&
     missionState !== 'READY' &&
     missionState !== 'MISSION_COMPLETE';
+
+  const handleDurationChange = (seconds: number) => {
+    if (isMissionActive) return;
+    setSelectedDuration(seconds);
+    setIsCustom(false);
+    missionEngine.setMissionDuration(seconds);
+  };
+
+  const handleCustomMinutesChange = (val: string) => {
+    setCustomMinutes(val);
+    const num = parseFloat(val);
+    if (!isNaN(num) && num > 0) {
+      const secs = Math.round(num * 60);
+      setSelectedDuration(secs);
+      missionEngine.setMissionDuration(secs);
+    }
+  };
 
   const isDroneAirborne = telemetry.isArmed && telemetry.altitude > 1.0;
   const isArmed = telemetry.isArmed;
@@ -188,6 +214,78 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
         {/* Left: Mission Controls */}
         <div className="lg:col-span-6 space-y-4">
+          {/* Mission Duration Configuration (Operator/Admin) */}
+          <div className="bg-slate-900/90 p-3 sm:p-3.5 rounded-xl border border-slate-800 hud-border font-mono space-y-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <Clock className="w-3.5 h-3.5 text-sky-400" />
+                <span className="text-[11px] font-black uppercase text-slate-300 tracking-wider">
+                  MISSION DURATION CONFIG
+                </span>
+              </div>
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                isMissionActive ? 'bg-amber-950/80 text-amber-300 border border-amber-500/40' : 'bg-slate-800 text-sky-400'
+              }`}>
+                {isMissionActive ? 'LOCKED IN FLIGHT' : `ACTIVE: ${Math.round(selectedDuration / 60)}M (${selectedDuration}s)`}
+              </span>
+            </div>
+
+            {/* Presets Grid */}
+            <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
+              {[
+                { label: '1 MIN', secs: 60 },
+                { label: '2 MIN', secs: 120 },
+                { label: '3 MIN (DEF)', secs: 180 },
+                { label: '5 MIN', secs: 300 },
+                { label: '10 MIN', secs: 600 },
+                { label: 'CUSTOM', secs: -1, isCustomOption: true },
+              ].map((opt) => {
+                const isSelected = opt.isCustomOption ? isCustom : (!isCustom && selectedDuration === opt.secs);
+                return (
+                  <button
+                    key={opt.label}
+                    type="button"
+                    disabled={isMissionActive}
+                    onClick={() => {
+                      if (opt.isCustomOption) {
+                        setIsCustom(true);
+                      } else {
+                        handleDurationChange(opt.secs);
+                      }
+                    }}
+                    className={`py-1.5 px-1 rounded-lg text-[10px] font-extrabold uppercase transition border text-center ${
+                      isSelected
+                        ? 'bg-sky-600 border-sky-400 text-white shadow-md shadow-sky-600/30 font-black'
+                        : 'bg-slate-950/80 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                    } ${isMissionActive ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Custom Input */}
+            {isCustom && !isMissionActive && (
+              <div className="flex items-center space-x-2 pt-1 border-t border-slate-800/80">
+                <span className="text-[10px] text-slate-400 uppercase font-bold">Custom Window:</span>
+                <div className="flex items-center space-x-1.5">
+                  <input
+                    type="number"
+                    min="1"
+                    max="60"
+                    step="1"
+                    value={customMinutes}
+                    onChange={(e) => handleCustomMinutesChange(e.target.value)}
+                    className="w-16 bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-white font-mono text-center focus:border-sky-500 focus:outline-none"
+                    placeholder="Mins"
+                  />
+                  <span className="text-[10px] text-slate-400">Minutes ({Math.round((parseFloat(customMinutes) || 1) * 60)}s)</span>
+                </div>
+              </div>
+            )}
+          </div>
+
           <MissionTimer
             remainingSeconds={remainingSeconds}
             elapsedSeconds={elapsedSeconds}

@@ -2,18 +2,17 @@ import React, { useEffect, useState } from 'react';
 import { RunnerLinkState, DroneQRDispatchPayload } from '../../types/runner';
 import { MissionState } from '../../types/mission';
 import { runnerCommService } from '../../services/runnerCommService';
+import { missionEngine } from '../../services/missionEngine';
 import { AckProtocolCard } from './AckProtocolCard';
-import { MissionTimer } from '../common/MissionTimer';
 import { 
   CheckCircle2, 
   Clock, 
   Radio, 
-  Send, 
-  ShieldCheck, 
   Sparkles, 
   Wifi, 
-  Activity,
-  Zap
+  AlertTriangle,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -35,6 +34,7 @@ export const RunnerDashboard: React.FC<RunnerDashboardProps> = ({
   const [receivedCode, setReceivedCode] = useState<string | null>(runnerLink.latestReceivedQR || null);
   const [ackDispatched, setAckDispatched] = useState<boolean>(false);
   const [receiptTimestamp, setReceiptTimestamp] = useState<number | null>(null);
+  const [showDiagnostics, setShowDiagnostics] = useState<boolean>(false);
 
   useEffect(() => {
     // Subscribe to direct wireless packets from Drone Android
@@ -47,8 +47,8 @@ export const RunnerDashboard: React.FC<RunnerDashboardProps> = ({
         // Trigger celebratory confetti effect on code arrival
         try {
           confetti({
-            particleCount: 50,
-            spread: 60,
+            particleCount: 60,
+            spread: 70,
             origin: { y: 0.6 }
           });
         } catch (e) {}
@@ -70,17 +70,29 @@ export const RunnerDashboard: React.FC<RunnerDashboardProps> = ({
     };
   }, []);
 
+  const totalDuration = missionEngine.getMissionDurationSeconds() || 180;
+  const formatTime = (totalSecs: number) => {
+    const mins = Math.floor(totalSecs / 60);
+    const secs = totalSecs % 60;
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  };
+
+  const isCritical = remainingSeconds <= Math.min(45, Math.max(15, Math.floor(totalDuration * 0.25))) && remainingSeconds > 0;
+  const isWarning = remainingSeconds > Math.min(45, Math.max(15, Math.floor(totalDuration * 0.25))) && remainingSeconds <= Math.min(90, Math.max(30, Math.floor(totalDuration * 0.5)));
+  const isComplete = missionState === 'MISSION_COMPLETE';
+  const isExpired = remainingSeconds === 0;
+
   return (
-    <div className={`p-3 sm:p-5 max-w-5xl mx-auto space-y-4 sm:space-y-5 font-mono ${className}`}>
-      {/* Top Banner: Runner Status Bar */}
-      <div className="bg-slate-900/90 p-4 rounded-xl border border-slate-800 hud-border flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+    <div className={`p-3 sm:p-5 max-w-6xl mx-auto space-y-4 sm:space-y-5 font-mono ${className}`}>
+      {/* Top Banner: Minimal Runner Status Bar */}
+      <div className="bg-slate-900/90 p-3 sm:p-4 rounded-xl border border-slate-800 hud-border flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
         <div>
-          <div className="text-[11px] text-slate-400 font-bold uppercase tracking-wider">
+          <div className="text-[10px] sm:text-[11px] text-slate-400 font-bold uppercase tracking-wider">
             RUNNER ANDROID FIELD UNIT
           </div>
-          <div className="text-base sm:text-lg font-black text-slate-100 mt-0.5 flex items-center space-x-2">
+          <div className="text-sm sm:text-base font-black text-slate-100 mt-0.5 flex items-center space-x-2">
             <span>RUNNER STATUS:</span>
-            <span className="text-emerald-400 flex items-center space-x-1">
+            <span className="text-emerald-400 flex items-center space-x-1 font-extrabold">
               <CheckCircle2 className="w-4 h-4" />
               <span>CONNECTED ✓</span>
             </span>
@@ -88,87 +100,188 @@ export const RunnerDashboard: React.FC<RunnerDashboardProps> = ({
         </div>
 
         {/* Wireless Link Status */}
-        <div className="flex items-center space-x-2 text-xs">
-          <div className="bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800 text-slate-300 flex items-center space-x-1.5">
+        <div className="flex items-center space-x-2 text-xs self-start sm:self-auto">
+          <div className="bg-slate-950 px-3 py-1 rounded-lg border border-slate-800 text-slate-300 flex items-center space-x-1.5">
             <Wifi className="w-3.5 h-3.5 text-sky-400" />
-            <span>Direct P2P Link ({runnerLink.signalStrengthDbm} dBm)</span>
+            <span>P2P Direct ({runnerLink.signalStrengthDbm} dBm)</span>
           </div>
-          <div className="bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800 text-emerald-400 font-bold">
-            Distance ~12m
+          <div className="bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800 text-emerald-400 font-bold text-xs">
+            ~12m Proximity
           </div>
         </div>
       </div>
 
-      {/* Main Field Stage: Before / After QR Receipt */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-        {/* Left / Hero Box: The Big Rescue Code Display (lg: 7 cols) */}
-        <div className="lg:col-span-7">
-          {receivedCode ? (
-            /* AFTER RECEIVING QR: HIGH-CONTRAST OUTDOOR READABLE HERO */
-            <div className="bg-gradient-to-b from-slate-900 to-emerald-950/40 p-6 sm:p-8 rounded-2xl border-2 border-emerald-500 shadow-2xl shadow-emerald-500/20 text-center space-y-4">
-              <div className="inline-flex items-center space-x-2 bg-emerald-950 text-emerald-300 border border-emerald-400 px-4 py-1.5 rounded-full text-xs sm:text-sm font-extrabold uppercase tracking-wider shadow-lg">
-                <Sparkles className="w-4 h-4" />
-                <span>QR CODE RECEIVED AUTOMATICALLY</span>
-              </div>
+      {/* ============================================================ */}
+      {/* DUAL ESSENTIAL HERO CARDS: CODE & REMAINING TIME             */}
+      {/* High contrast, glanceable at distance across all devices     */}
+      {/* ============================================================ */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        
+        {/* CARD 1: RESCUE CODE */}
+        <div className={`p-5 sm:p-7 rounded-2xl border-2 flex flex-col justify-between text-center transition-all ${
+          receivedCode
+            ? 'bg-gradient-to-b from-slate-900 via-emerald-950/40 to-slate-900 border-emerald-500 shadow-2xl shadow-emerald-500/20'
+            : 'bg-slate-900/90 border-slate-800 shadow-xl'
+        }`}>
+          <div>
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2 mb-3">
+              <span className="text-[11px] sm:text-xs font-black uppercase tracking-widest text-slate-400">
+                COMPETITION RESCUE TARGET
+              </span>
+              <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full border ${
+                receivedCode
+                  ? 'bg-emerald-950 border-emerald-400 text-emerald-300 animate-pulse'
+                  : 'bg-slate-950 border-slate-700 text-sky-400'
+              }`}>
+                {receivedCode ? 'LOCK CONFIRMED' : 'SEARCHING'}
+              </span>
+            </div>
 
-              {/* Huge High-Contrast 2-Digit Rescue Code */}
-              <div className="py-4">
-                <div className="text-slate-400 text-xs sm:text-sm uppercase tracking-widest font-bold mb-1">
-                  OFFICIAL RESCUE PAYLOAD
-                </div>
-                <div className="text-7xl sm:text-8xl md:text-9xl font-black text-white tracking-widest leading-none drop-shadow-[0_10px_25px_rgba(16,185,129,0.5)]">
+            <div className="text-xs sm:text-sm font-bold uppercase tracking-wider text-slate-400 mb-1">
+              CODE
+            </div>
+
+            {/* Huge Prominent CODE Display */}
+            <div className="py-4 sm:py-6">
+              {receivedCode ? (
+                <div className="text-7xl sm:text-8xl md:text-9xl font-black text-white tracking-widest leading-none drop-shadow-[0_10px_25px_rgba(16,185,129,0.6)]">
                   {receivedCode}
                 </div>
-              </div>
-
-              {/* Status & Auto-ACK Confirmation Banner */}
-              <div className="bg-emerald-900/60 border border-emerald-400/80 p-3.5 rounded-xl text-emerald-200 text-sm sm:text-base font-extrabold flex items-center justify-center space-x-2">
-                <CheckCircle2 className="w-5 h-5 text-emerald-300" />
-                <span>✓ RECEIVED & ACKNOWLEDGED TO DRONE</span>
-              </div>
-
-              <div className="text-xs text-slate-400">
-                Timestamp: {receiptTimestamp ? new Date(receiptTimestamp).toLocaleTimeString() : 'NOW'} • Direct Drone Wireless
-              </div>
-            </div>
-          ) : (
-            /* BEFORE RECEIVING QR: WAITING HERO */
-            <div className="bg-slate-900/80 p-8 sm:p-12 rounded-2xl border border-slate-800 text-center space-y-4 min-h-[340px] flex flex-col items-center justify-center">
-              <div className="w-16 h-16 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-sky-400 mx-auto shadow-inner">
-                <Radio className="w-8 h-8 animate-pulse" />
-              </div>
-
-              <div className="space-y-1">
-                <div className="text-xl sm:text-2xl font-black text-white tracking-wide">
-                  WAITING FOR QR CODE...
+              ) : (
+                <div className="space-y-2">
+                  <div className="text-5xl sm:text-6xl md:text-7xl font-black text-slate-600 tracking-widest leading-none animate-pulse">
+                    ---
+                  </div>
+                  <div className="text-xs sm:text-sm text-slate-400 font-bold flex items-center justify-center space-x-1.5 mt-2">
+                    <Radio className="w-4 h-4 text-sky-400 animate-spin" />
+                    <span>AWAITING AIRBORNE QR LOCK</span>
+                  </div>
                 </div>
-                <p className="text-xs sm:text-sm text-slate-400 max-w-sm mx-auto">
-                  The drone is currently searching the rescue zone. The decoded 2-digit code will appear here automatically upon visual lock.
-                </p>
+              )}
+            </div>
+          </div>
+
+          {/* Code Footer Status */}
+          <div className="mt-3">
+            {receivedCode ? (
+              <div className="bg-emerald-950/80 border border-emerald-500/80 p-3 rounded-xl text-emerald-200 text-xs sm:text-sm font-extrabold flex items-center justify-center space-x-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                <span>RECEIVED & AUTO-ACKNOWLEDGED</span>
+              </div>
+            ) : (
+              <div className="bg-slate-950/80 border border-slate-800 p-2.5 rounded-xl text-slate-400 text-xs flex items-center justify-center space-x-2">
+                <div className="w-2 h-2 rounded-full bg-sky-400 animate-ping" />
+                <span>Code displays automatically when drone detects target</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* CARD 2: REMAINING TIME */}
+        <div className={`p-5 sm:p-7 rounded-2xl border-2 flex flex-col justify-between text-center transition-all ${
+          isComplete
+            ? 'bg-gradient-to-b from-slate-900 via-emerald-950/30 to-slate-900 border-emerald-500 shadow-xl'
+            : isExpired
+            ? 'bg-gradient-to-b from-slate-900 via-rose-950/40 to-slate-900 border-rose-500 shadow-xl animate-pulse'
+            : isCritical
+            ? 'bg-gradient-to-b from-slate-900 via-rose-950/30 to-slate-900 border-rose-500/70 shadow-xl'
+            : isWarning
+            ? 'bg-gradient-to-b from-slate-900 via-amber-950/30 to-slate-900 border-amber-500/60 shadow-xl'
+            : 'bg-slate-900/90 border-sky-500/40 shadow-xl'
+        }`}>
+          <div>
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2 mb-3">
+              <span className="text-[11px] sm:text-xs font-black uppercase tracking-widest text-slate-400">
+                OFFICIAL MISSION WINDOW
+              </span>
+              <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full border bg-slate-950 border-slate-700 text-slate-300">
+                MAX {totalDuration}s
+              </span>
+            </div>
+
+            <div className="text-xs sm:text-sm font-bold uppercase tracking-wider text-slate-400 mb-1">
+              REMAINING TIME
+            </div>
+
+            {/* Huge Prominent REMAINING TIME Countdown */}
+            <div className="py-4 sm:py-6">
+              <div className={`text-6xl sm:text-7xl md:text-8xl lg:text-9xl font-black tracking-widest leading-none ${
+                isComplete
+                  ? 'text-emerald-400'
+                  : isExpired
+                  ? 'text-rose-500'
+                  : isCritical
+                  ? 'text-rose-400 animate-pulse'
+                  : isWarning
+                  ? 'text-amber-400'
+                  : 'text-white'
+              }`}>
+                {formatTime(remainingSeconds)}
               </div>
 
-              <div className="bg-slate-950/80 px-4 py-2 rounded-full border border-slate-800 text-xs text-slate-400 flex items-center space-x-2">
-                <div className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                <span>LISTENING ON DIRECT WIRELESS LINK (10-15m PROXIMITY)</span>
+              <div className="text-xs sm:text-sm font-bold text-slate-400 mt-2 flex items-center justify-center space-x-2">
+                <Clock className="w-3.5 h-3.5 text-slate-400" />
+                <span>ELAPSED: +{formatTime(elapsedSeconds)}</span>
               </div>
             </div>
-          )}
+          </div>
+
+          {/* Time Progress Bar & Footer */}
+          <div className="space-y-2 mt-3">
+            <div className="w-full bg-slate-950 h-2.5 rounded-full overflow-hidden border border-slate-800">
+              <div
+                className={`h-full transition-all duration-1000 ${
+                  isCritical ? 'bg-rose-500' : isWarning ? 'bg-amber-500' : isComplete ? 'bg-emerald-500' : 'bg-sky-500'
+                }`}
+                style={{ width: `${Math.min(100, Math.max(0, (remainingSeconds / totalDuration) * 100))}%` }}
+              />
+            </div>
+
+            <div className="text-[11px] text-slate-400 font-bold flex items-center justify-center space-x-1">
+              {isCritical && !isComplete && (
+                <span className="text-rose-400 flex items-center space-x-1 animate-pulse">
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  <span>CRITICAL: Safe RTL Standby</span>
+                </span>
+              )}
+              {isComplete && (
+                <span className="text-emerald-400 flex items-center space-x-1">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>MISSION COMPLETED IN TIME</span>
+                </span>
+              )}
+              {!isCritical && !isComplete && (
+                <span className="text-sky-400">COUNTDOWN SYNCHRONIZED WITH DRONE & GCS</span>
+              )}
+            </div>
+          </div>
         </div>
 
-        {/* Right Side: Mission Timer & Protocol Handshake (lg: 5 cols) */}
-        <div className="lg:col-span-5 space-y-4">
-          <MissionTimer
-            remainingSeconds={remainingSeconds}
-            elapsedSeconds={elapsedSeconds}
-            missionState={missionState}
-          />
+      </div>
 
-          <AckProtocolCard
-            runnerLink={runnerLink}
-            receivedCode={receivedCode || undefined}
-            ackSent={ackDispatched}
-          />
-        </div>
+      {/* Diagnostics / Protocol Handshake (Collapsible for zero clutter) */}
+      <div className="bg-slate-900/60 rounded-xl border border-slate-800/80 overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setShowDiagnostics(!showDiagnostics)}
+          className="w-full px-4 py-2.5 flex items-center justify-between text-xs text-slate-400 hover:text-slate-200 transition font-bold uppercase cursor-pointer"
+        >
+          <span className="flex items-center space-x-2">
+            <span>WIRELESS TELEMETRY & ACK PROTOCOL</span>
+            <span className="text-[10px] text-emerald-400 font-extrabold">• DIRECT LINK</span>
+          </span>
+          {showDiagnostics ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+        </button>
+
+        {showDiagnostics && (
+          <div className="p-3.5 pt-0 border-t border-slate-800/80">
+            <AckProtocolCard
+              runnerLink={runnerLink}
+              receivedCode={receivedCode || undefined}
+              ackSent={ackDispatched}
+            />
+          </div>
+        )}
       </div>
     </div>
   );

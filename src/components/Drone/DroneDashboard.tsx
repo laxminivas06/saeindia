@@ -7,9 +7,7 @@ import { missionEngine } from '../../services/missionEngine';
 import { CameraVisionHUD } from './CameraVisionHUD';
 import { QRResultCard } from './QRResultCard';
 import { PixhawkMonitor } from './PixhawkMonitor';
-import { PixhawkConnectionCard } from './PixhawkConnectionCard';
 import { PreArmChecksPanel } from '../common/PreArmChecksPanel';
-import { ControlModePanel } from '../common/ControlModePanel';
 import { MissionTimer } from '../common/MissionTimer';
 import {
   Play,
@@ -67,7 +65,6 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
   onQRDetected,
   onEmergencyRTL
 }) => {
-  const [showPhoneOtgHelp, setShowPhoneOtgHelp] = useState(false);
   const [preArmError, setPreArmError] = useState<string | null>(null);
 
   // Real Arm / Disarm & Mission Button States
@@ -178,17 +175,68 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
     missionEngine.startMission();
   };
 
+  // Scanner ON/OFF state (default OFF when Drone Core opens)
+  const [scannerActive, setScannerActive] = useState<boolean>(false);
+
   return (
     <div className="space-y-4 font-mono select-none">
-      {/* 1. AUTOMATIC USB-OTG & ESP32-S3 WI-FI CONNECTION CARD WITH STATE MACHINE & DIAGNOSTICS */}
-      <PixhawkConnectionCard
-        connectionState={pixhawkState}
-        onOpenHelp={() => setShowPhoneOtgHelp(true)}
-      />
+      {/* 1. AUTOMATIC DRONE CONNECTIVITY STATUS (SYNCED VIA GCS LINK - NO MANUAL CONNECTION MODE) */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 sm:p-4 shadow-xl">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center space-x-3">
+            <div className={`p-2.5 rounded-xl border shrink-0 ${
+              pixhawkState.isConnected
+                ? 'bg-emerald-950/80 text-emerald-400 border-emerald-500/50'
+                : 'bg-amber-950/80 text-amber-400 border-amber-500/50 animate-pulse'
+            }`}>
+              <Radio className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs sm:text-sm font-black uppercase text-white tracking-wider">
+                  DRONE CONNECTIVITY
+                </span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-sky-950 text-sky-300 border border-sky-600/40">
+                  AUTOMATIC GCS SYNC
+                </span>
+                <span className={`text-[10px] sm:text-[11px] font-black px-2 py-0.5 rounded-full border ${
+                  pixhawkState.isConnected
+                    ? 'bg-emerald-950/90 text-emerald-300 border-emerald-500/60'
+                    : 'bg-rose-950/80 text-rose-300 border-rose-500/50'
+                }`}>
+                  {pixhawkState.isConnected ? 'CONNECTED VIA GCS ✓' : 'WAITING FOR GCS CONNECTION'}
+                </span>
+              </div>
+              <div className="text-[11px] text-slate-400 mt-0.5">
+                {pixhawkState.isConnected
+                  ? `Active Link: ${pixhawkState.connectionType === 'ESP32_WEBSOCKET' ? 'ESP32-S3 Wireless Bridge' : pixhawkState.isRealHardware ? 'Pixhawk USB OTG' : 'SITL Simulator'} • SysID: ${pixhawkState.systemId || 1} • Rate: ${pixhawkState.heartbeatHz || 1.0} Hz`
+                  : 'Drone connection is established through Ground Control Station and automatically synced throughout the application.'}
+              </div>
+            </div>
+          </div>
 
-      {/* 2. Top Bar: Official Mission Timer & Master Flight Controls (ARM, START MISSION, RTL, DISARM) */}
+          <div className="flex items-center space-x-2 text-xs font-mono">
+            <div className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
+              pixhawkState.isReceivingTelemetry
+                ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
+                : 'bg-slate-950 border-slate-800 text-slate-400'
+            }`}>
+              MAVLink: {pixhawkState.isReceivingTelemetry ? 'STREAMING' : 'IDLE'}
+            </div>
+            <div className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
+              telemetry.gps.isLocked
+                ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
+                : 'bg-amber-950/60 border-amber-500/40 text-amber-300'
+            }`}>
+              GPS: {telemetry.gps.satellites} Sats
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 2. Top Bar: Mission Countdown Timer & Autonomous Mission Actions (No manual flight controls) */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-stretch">
-        {/* Left: 8-Minute Official Mission Countdown */}
+        {/* Left: Mission Countdown Timer */}
         <div className="md:col-span-6 flex flex-col justify-between">
           <MissionTimer
             remainingSeconds={remainingSeconds}
@@ -197,97 +245,101 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
           />
         </div>
 
-        {/* Right: Flight Control Interface (RC / NO-RC Mode, ARM/DISARM, D-Pad, Takeoff/Land) */}
-        <div className="md:col-span-6 space-y-3">
-          <ControlModePanel
-            telemetry={telemetry}
-            connectionState={pixhawkState}
-            onArmClick={handleArmClick}
-            onDisarmClick={handleDisarmClick}
-            isArmingInProgress={isArmingInProgress}
-            isDisarmingInProgress={isDisarmingInProgress}
-          />
+        {/* Right: Autonomous Mission Actions Deck (Focuses on autonomous mission execution) */}
+        <div className="md:col-span-6 flex flex-col justify-between bg-slate-900/90 p-4 rounded-2xl border border-slate-800 shadow-lg space-y-3">
+          <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+            <div className="flex items-center space-x-2">
+              <Zap className="w-4 h-4 text-sky-400" />
+              <span className="text-xs font-black uppercase text-slate-200 tracking-wider">
+                AUTONOMOUS MISSION EXECUTION
+              </span>
+            </div>
+            <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border ${
+              isArmed
+                ? 'bg-rose-950/90 text-rose-300 border-rose-500/70 animate-pulse'
+                : 'bg-slate-950 text-slate-400 border-slate-800'
+            }`}>
+              {isArmed ? 'VEHICLE ARMED' : 'VEHICLE DISARMED'}
+            </span>
+          </div>
 
-          {/* Mission Start & RTL Bar */}
-          <div className="bg-slate-900/90 p-3 rounded-2xl border border-slate-800 shadow-lg space-y-2">
-            <div className="grid grid-cols-2 gap-2">
-              {/* START MISSION BUTTON */}
+          <div className="grid grid-cols-2 gap-2.5">
+            {/* START MISSION BUTTON */}
+            <button
+              type="button"
+              onClick={handleStartMissionClick}
+              disabled={isMissionRunning || isMissionCompleted || !pixhawkState.isConnected}
+              className={`py-3.5 px-3 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center space-x-1.5 transition shadow-lg ${
+                missionState === 'STARTING'
+                  ? 'bg-amber-600 text-white animate-pulse'
+                  : isMissionRunning
+                  ? 'bg-sky-600 text-white shadow-sky-600/30 animate-pulse cursor-default'
+                  : isMissionCompleted
+                  ? 'bg-emerald-800 text-emerald-200 border border-emerald-500 cursor-default'
+                  : isMissionAborted
+                  ? 'bg-rose-950 border border-rose-500 text-rose-300'
+                  : pixhawkState.isConnected
+                  ? 'bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white shadow-sky-600/30 cursor-pointer'
+                  : 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
+              }`}
+              title="Start Autonomous Search & QR Rescue Mission"
+            >
+              {missionState === 'STARTING' ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                  <span>STARTING...</span>
+                </>
+              ) : isMissionRunning ? (
+                <>
+                  <Activity className="w-4 h-4 shrink-0 animate-spin" />
+                  <span>MISSION RUNNING</span>
+                </>
+              ) : isMissionCompleted ? (
+                <>
+                  <CheckCircle className="w-4 h-4 shrink-0 text-emerald-300" />
+                  <span>COMPLETED</span>
+                </>
+              ) : isMissionAborted ? (
+                <>
+                  <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
+                  <span>MISSION FAILED</span>
+                </>
+              ) : (
+                <>
+                  <Play className="w-4 h-4 fill-current shrink-0" />
+                  <span>START MISSION</span>
+                </>
+              )}
+            </button>
+
+            {/* EMERGENCY RTL */}
+            <button
+              type="button"
+              onClick={onEmergencyRTL}
+              className="py-3.5 px-3 rounded-xl bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-black text-xs uppercase tracking-wider flex items-center justify-center space-x-1.5 shadow-lg shadow-rose-600/30 transition cursor-pointer"
+              title="Immediately abort mission and fly back to Home Point"
+            >
+              <RotateCcw className="w-4 h-4 shrink-0" />
+              <span>RTL (HOME)</span>
+            </button>
+          </div>
+
+          {/* Error Message Toast / Alert */}
+          {armError && (
+            <div className="p-2.5 bg-rose-950/95 border border-rose-500 rounded-lg text-rose-200 text-xs flex items-start justify-between space-x-2 shadow-lg">
+              <div className="flex items-start space-x-2 min-w-0">
+                <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                <span className="font-mono break-words leading-tight">{armError}</span>
+              </div>
               <button
                 type="button"
-                onClick={handleStartMissionClick}
-                disabled={isMissionRunning || isMissionCompleted || !pixhawkState.isConnected}
-                className={`py-3 px-3 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center space-x-1.5 transition shadow-lg ${
-                  missionState === 'STARTING'
-                    ? 'bg-amber-600 text-white animate-pulse'
-                    : isMissionRunning
-                    ? 'bg-sky-600 text-white shadow-sky-600/30 animate-pulse cursor-default'
-                    : isMissionCompleted
-                    ? 'bg-emerald-800 text-emerald-200 border border-emerald-500 cursor-default'
-                    : isMissionAborted
-                    ? 'bg-rose-950 border border-rose-500 text-rose-300'
-                    : pixhawkState.isConnected
-                    ? 'bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white shadow-sky-600/30 cursor-pointer'
-                    : 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
-                }`}
-                title="Start Autonomous Search & QR Rescue Mission"
+                onClick={() => setArmError(null)}
+                className="text-slate-400 hover:text-white text-xs shrink-0 cursor-pointer p-0.5"
               >
-                {missionState === 'STARTING' ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin shrink-0" />
-                    <span>STARTING...</span>
-                  </>
-                ) : isMissionRunning ? (
-                  <>
-                    <Activity className="w-4 h-4 shrink-0 animate-spin" />
-                    <span>MISSION RUNNING</span>
-                  </>
-                ) : isMissionCompleted ? (
-                  <>
-                    <CheckCircle className="w-4 h-4 shrink-0 text-emerald-300" />
-                    <span>COMPLETED</span>
-                  </>
-                ) : isMissionAborted ? (
-                  <>
-                    <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
-                    <span>MISSION FAILED</span>
-                  </>
-                ) : (
-                  <>
-                    <Play className="w-4 h-4 fill-current shrink-0" />
-                    <span>START MISSION</span>
-                  </>
-                )}
-              </button>
-
-              {/* EMERGENCY RTL */}
-              <button
-                type="button"
-                onClick={onEmergencyRTL}
-                className="py-3 px-3 rounded-xl bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-black text-xs uppercase tracking-wider flex items-center justify-center space-x-1.5 shadow-lg shadow-rose-600/30 transition cursor-pointer"
-                title="Immediately abort mission and fly back to Home Point"
-              >
-                <RotateCcw className="w-4 h-4 shrink-0" />
-                <span>RTL (HOME)</span>
+                ✕
               </button>
             </div>
-
-            {/* Error Message Toast / Alert */}
-            {armError && (
-              <div className="p-2.5 bg-rose-950/95 border border-rose-500 rounded-lg text-rose-200 text-xs flex items-start justify-between space-x-2 shadow-lg">
-                <div className="flex items-start space-x-2 min-w-0">
-                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-                  <span className="font-mono break-words leading-tight">{armError}</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setArmError(null)}
-                  className="text-slate-400 hover:text-white text-xs shrink-0 cursor-pointer p-0.5"
-                >
-                  ✕
-                </button>
-              </div>
-            )}
-          </div>
+          )}
         </div>
       </div>
 
@@ -400,6 +452,8 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
               isScanning={isScanning}
               decodedQR={decodedQR}
               telemetry={telemetry}
+              scannerActive={scannerActive}
+              onScannerToggle={setScannerActive}
               className="w-full h-full"
             />
           </div>
@@ -429,81 +483,6 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
           />
         </div>
       </div>
-
-      {/* 5. ANDROID PHONE OTG SETUP GUIDE MODAL */}
-      {showPhoneOtgHelp && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border-2 border-emerald-500 rounded-2xl max-w-lg w-full p-5 sm:p-6 space-y-4 text-slate-200 font-mono shadow-2xl relative">
-            <button
-              onClick={() => setShowPhoneOtgHelp(false)}
-              className="absolute top-4 right-4 p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition cursor-pointer"
-            >
-              <X className="w-5 h-5" />
-            </button>
-
-            <div className="flex items-center space-x-2 text-emerald-400 font-black text-sm uppercase tracking-wider border-b border-slate-800 pb-3">
-              <Smartphone className="w-5 h-5" />
-              <span>How to Connect Phone to Pixhawk UART / USB-OTG</span>
-            </div>
-
-            <div className="space-y-3 text-xs">
-              <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-2">
-                <div className="font-bold text-amber-400 flex items-center space-x-1.5">
-                  <AlertTriangle className="w-4 h-4 shrink-0" />
-                  <span>Step 1: Turn ON "OTG Connection" in Phone Settings</span>
-                </div>
-                <p className="text-slate-400 leading-relaxed">
-                  Most Android phones (OnePlus, Realme, Oppo, Xiaomi, Vivo, Samsung) turn OTG off by default. Go to:
-                </p>
-                <div className="bg-slate-900 px-3 py-1.5 rounded border border-slate-800 text-emerald-300 font-bold text-[11px]">
-                  Phone Settings ➔ Additional Settings ➔ Turn ON "OTG Connection"
-                </div>
-              </div>
-
-              <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-2">
-                <div className="font-bold text-sky-400 flex items-center space-x-1.5">
-                  <Usb className="w-4 h-4 shrink-0" />
-                  <span>Step 2: Connect Cables (Method A, B or C)</span>
-                </div>
-                <div className="text-slate-300 space-y-1 text-[11px]">
-                  <div><strong>Method A (Direct USB):</strong> Micro-USB to USB-C OTG cable from Pixhawk Micro-USB port to Phone.</div>
-                  <div><strong>Method B (TELEM1 / UART):</strong> Pixhawk TELEM1 port ➔ CP2102/FTDI UART Module (57600 baud) ➔ USB-OTG ➔ Phone.</div>
-                  <div><strong>Method C (ESP32-S3 Wi-Fi):</strong> Pixhawk TELEM2 port ➔ ESP32-S3 ➔ Local (ws://ESP32-IP:8080) or Secure HTTPS Relay (wss://...).</div>
-                </div>
-              </div>
-
-              <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-2">
-                <div className="font-bold text-purple-400 flex items-center space-x-1.5">
-                  <Radio className="w-4 h-4 shrink-0" />
-                  <span>Step 3: Pixhawk Baud Rate Configuration</span>
-                </div>
-                <p className="text-slate-400 text-[11px]">
-                  Ensure ArduPilot parameter <strong>SERIAL1_PROTOCOL = 2</strong> (MAVLink2) and <strong>SERIAL1_BAUD = 57</strong> (57600 baud).
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center space-x-3 pt-2">
-              <button
-                onClick={() => setShowPhoneOtgHelp(false)}
-                className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition cursor-pointer"
-              >
-                Close
-              </button>
-              <button
-                onClick={async () => {
-                  setShowPhoneOtgHelp(false);
-                  await mavlinkService.connectHardware();
-                }}
-                className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs rounded-xl transition flex items-center justify-center space-x-1.5 shadow-lg shadow-emerald-600/30 cursor-pointer"
-              >
-                <Usb className="w-4 h-4" />
-                <span>TRY CONNECTING NOW</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

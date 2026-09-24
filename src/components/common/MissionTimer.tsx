@@ -1,11 +1,13 @@
 import React from 'react';
 import { Clock, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { MissionState } from '../../types/mission';
+import { missionEngine } from '../../services/missionEngine';
 
 interface MissionTimerProps {
   remainingSeconds: number;
   elapsedSeconds: number;
   missionState: MissionState;
+  totalDurationSeconds?: number;
   className?: string;
   compact?: boolean;
 }
@@ -14,6 +16,7 @@ export const MissionTimer: React.FC<MissionTimerProps> = ({
   remainingSeconds,
   elapsedSeconds,
   missionState,
+  totalDurationSeconds,
   className = '',
   compact = false
 }) => {
@@ -23,10 +26,12 @@ export const MissionTimer: React.FC<MissionTimerProps> = ({
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   };
 
-  const isCritical = remainingSeconds <= 45 && remainingSeconds > 0;
-  const isWarning = remainingSeconds > 45 && remainingSeconds <= 90;
+  const totalDuration = totalDurationSeconds || missionEngine.getMissionDurationSeconds() || 180;
+  const isCritical = remainingSeconds <= Math.min(45, Math.max(15, Math.floor(totalDuration * 0.25))) && remainingSeconds > 0;
+  const isWarning = remainingSeconds > Math.min(45, Math.max(15, Math.floor(totalDuration * 0.25))) && remainingSeconds <= Math.min(90, Math.max(30, Math.floor(totalDuration * 0.5)));
   const isExpired = remainingSeconds === 0;
   const isComplete = missionState === 'MISSION_COMPLETE';
+  const durationLabel = totalDuration % 60 === 0 ? `${totalDuration / 60}-MIN` : `${totalDuration}s`;
 
   // Dynamic status styling
   let timerColor = 'text-sky-400 border-sky-500/30 bg-sky-950/20';
@@ -63,11 +68,11 @@ export const MissionTimer: React.FC<MissionTimerProps> = ({
         <div className="flex items-center space-x-1.5">
           <Clock className={`w-4 h-4 ${pulseClass}`} />
           <span className="text-xs uppercase font-extrabold tracking-wider text-slate-300">
-            3-MINUTE MISSION TIMER
+            {durationLabel} MISSION TIMER
           </span>
         </div>
         <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
-          MAX 180s
+          MAX {totalDuration}s
         </span>
       </div>
 
@@ -91,7 +96,7 @@ export const MissionTimer: React.FC<MissionTimerProps> = ({
         </div>
       </div>
 
-      {/* Progress Bar of the 3-minute window */}
+      {/* Progress Bar of the mission window */}
       <div className="w-full bg-slate-800/80 h-2 rounded-full overflow-hidden mt-3 border border-slate-700/50">
         <div
           className={`h-full transition-all duration-1000 ${
@@ -103,7 +108,7 @@ export const MissionTimer: React.FC<MissionTimerProps> = ({
               ? 'bg-emerald-500'
               : 'bg-sky-500'
           }`}
-          style={{ width: `${(remainingSeconds / 180) * 100}%` }}
+          style={{ width: `${Math.min(100, Math.max(0, (remainingSeconds / totalDuration) * 100))}%` }}
         />
       </div>
 
@@ -111,7 +116,7 @@ export const MissionTimer: React.FC<MissionTimerProps> = ({
       {isCritical && !isComplete && (
         <div className="mt-2.5 flex items-center space-x-1.5 text-rose-300 text-xs font-bold animate-pulse">
           <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
-          <span>CRITICAL: Approaching 3-minute mission limit! Safe RTL standby.</span>
+          <span>CRITICAL: Approaching mission limit! Safe RTL standby.</span>
         </div>
       )}
       {isComplete && (

@@ -328,7 +328,7 @@ export const ManualControlDashboard: React.FC<ManualControlDashboardProps> = ({
             )}
           </div>
 
-          {/* Flight Control Panel (RC mode toggle etc.) */}
+          {/* Flight Control Panel (No RC Mode) */}
           <ControlModePanel
             telemetry={telemetry}
             connectionState={pixhawkState}

@@ -173,6 +173,12 @@ export interface PixhawkConnectionState {
   lastArmAckResult?: string;
   esp32WsRxBytes?: number;
   esp32PixhawkTxBytes?: number;
+  esp32LinkState?: 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED' | 'RECONNECTING' | 'ERROR';
+  esp32ProtocolMode?: 'AUTO' | 'WS' | 'WSS';
+  esp32Path?: string;
+  esp32LatencyMs?: number;
+  esp32ErrorCategory?: string;
+  esp32ErrorMessage?: string;
   diagnostics: UsbDeviceDiagnostics;
 }
 

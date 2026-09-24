@@ -8,6 +8,7 @@ import { storageService } from './storageService';
 type MissionStateListener = (state: MissionState, elapsedSec: number, remainingSec: number) => void;
 
 const PERSISTENCE_KEY = 'SAE_MISSION_PERSISTENT_STATE';
+const CONFIG_DURATION_KEY = 'SAE_CONFIGURED_MISSION_DURATION';
 
 interface PersistedMissionState {
   currentState: MissionState;
@@ -26,7 +27,7 @@ interface PersistedMissionState {
 
 class MissionEngine {
   private currentState: MissionState = 'IDLE';
-  private missionDurationLimitSec: number = 180; // 3-Minute Mission Window
+  private missionDurationLimitSec: number = 180; // Default 3-Minute Mission Window
   private remainingSeconds: number = 180;
   private elapsedSeconds: number = 0;
   private missionStartTime: number = 0;
@@ -49,6 +50,16 @@ class MissionEngine {
 
   constructor() {
     this.currentMissionNumber = storageService.getNextMissionNumber();
+    if (typeof window !== 'undefined') {
+      const savedDuration = localStorage.getItem(CONFIG_DURATION_KEY);
+      if (savedDuration) {
+        const parsed = parseInt(savedDuration, 10);
+        if (!isNaN(parsed) && parsed > 0) {
+          this.missionDurationLimitSec = parsed;
+          this.remainingSeconds = parsed;
+        }
+      }
+    }
     this.restorePersistentState();
     this.initListeners();
   }
@@ -59,6 +70,9 @@ class MissionEngine {
       const raw = localStorage.getItem(PERSISTENCE_KEY);
       if (raw) {
         const data: PersistedMissionState = JSON.parse(raw);
+        if (data.missionDurationLimitSec) {
+          this.missionDurationLimitSec = data.missionDurationLimitSec;
+        }
         if (data.homePointSet && data.homeLat && data.homeLon) {
           mavlinkService.setHomePoint(data.homeLat, data.homeLon, data.homeAlt);
         }
@@ -207,6 +221,22 @@ class MissionEngine {
 
   public getRemainingSeconds(): number {
     return this.remainingSeconds;
+  }
+
+  public getMissionDurationSeconds(): number {
+    return this.missionDurationLimitSec;
+  }
+
+  public setMissionDuration(seconds: number): void {
+    if (this.currentState === 'IDLE' || this.currentState === 'HOME_SET' || this.currentState === 'READY') {
+      const validSeconds = Math.max(10, Math.min(3600, seconds));
+      this.missionDurationLimitSec = validSeconds;
+      this.remainingSeconds = validSeconds;
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(CONFIG_DURATION_KEY, String(validSeconds));
+      }
+      this.notifyState();
+    }
   }
 
   public getDecodedQR(): DecodedQRData | null {
@@ -396,8 +426,10 @@ class MissionEngine {
   }
 
   private handleMissionTimeout() {
-    this.transitionTo('MISSION_TIMEOUT', '3-Minute Mission Window Expired. Automatic Fail-Safe RTL.');
-    this.triggerEmergencyRTL('3-Minute Mission Timer expired.');
+    const mins = Math.round(this.missionDurationLimitSec / 60);
+    const label = mins > 0 ? `${mins}-Minute` : `${this.missionDurationLimitSec}s`;
+    this.transitionTo('MISSION_TIMEOUT', `${label} Mission Window Expired. Automatic Fail-Safe RTL.`);
+    this.triggerEmergencyRTL(`Mission Timer (${label}) expired.`);
   }
 
   private startMasterTimer() {

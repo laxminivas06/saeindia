@@ -16,6 +16,7 @@ import {
   ArrowRight,
   AlertCircle
 } from 'lucide-react';
+import { ThemeController } from '../common/ThemeController';
 
 interface LoginScreenProps {
   onLoginSuccess: (role: AppRole) => void;
@@ -92,6 +93,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     <div className="min-h-screen bg-sae-dark flex flex-col items-center justify-center p-4 sm:p-6 font-mono relative overflow-hidden select-none">
       <div className="absolute inset-0 grid-bg opacity-30 pointer-events-none" />
       <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-sky-500/10 rounded-full blur-3xl pointer-events-none" />
+
+      {/* Top Right Theme Controller */}
+      <div className="absolute top-4 right-4 z-20">
+        <ThemeController showLabels />
+      </div>
 
       <div className="relative z-10 w-full max-w-md bg-slate-900/90 border border-slate-700/80 rounded-2xl shadow-2xl p-6 sm:p-8 backdrop-blur-md space-y-6">
         {/* Header Branding */}
@@ -204,22 +210,35 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
           <div className="grid grid-cols-3 gap-1.5 text-[10px] font-bold">
             <button
               onClick={() => handleQuickLogin('GROUND_STATION')}
-              className="py-2 rounded bg-sky-950/40 border border-sky-500/30 text-sky-400 hover:bg-sky-900/60 transition"
+              className="py-2 rounded bg-sky-950/40 border border-sky-500/30 text-sky-400 hover:bg-sky-900/60 transition cursor-pointer"
             >
               GCS Panel
             </button>
             <button
               onClick={() => handleQuickLogin('DRONE')}
-              className="py-2 rounded bg-amber-950/40 border border-amber-500/30 text-amber-400 hover:bg-amber-900/60 transition"
+              className="py-2 rounded bg-amber-950/40 border border-amber-500/30 text-amber-400 hover:bg-amber-900/60 transition cursor-pointer"
             >
               Drone Core
             </button>
             <button
               onClick={() => handleQuickLogin('RUNNER')}
-              className="py-2 rounded bg-emerald-950/40 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-900/60 transition"
+              className="py-2 rounded bg-emerald-950/40 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-900/60 transition cursor-pointer"
             >
               Runner Unit
             </button>
+          </div>
+        </div>
+
+        {/* Project & Team Specifications */}
+        <div className="pt-3 border-t border-slate-800 text-[11px] text-slate-400 text-center space-y-1">
+          <div className="font-bold text-slate-300">Spurthi Engineering College</div>
+          <div className="flex items-center justify-center space-x-1.5 text-[10px]">
+            <span className="text-sky-400 font-bold">Team Skycon</span>
+            <span>•</span>
+            <span>SAE Portal for Autonomous Drone</span>
+          </div>
+          <div className="text-[10px] text-slate-500">
+            Team ID: <span className="text-emerald-400 font-mono font-bold">ADDC20260123</span>
           </div>
         </div>
       </div>

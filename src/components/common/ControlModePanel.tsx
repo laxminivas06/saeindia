@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { 
-  Radio, 
   Gamepad2, 
   Power, 
   ArrowUp, 
@@ -13,7 +12,6 @@ import {
   PlaneLanding, 
   Home, 
   Hand,
-  CheckCircle2,
   AlertTriangle
 } from 'lucide-react';
 import { DroneTelemetry } from '../../types/mission';
@@ -37,17 +35,9 @@ export const ControlModePanel: React.FC<ControlModePanelProps> = ({
   isArmingInProgress = false,
   isDisarmingInProgress = false
 }) => {
-  const [controlMode, setControlModeState] = useState<'RC' | 'NO_RC'>('NO_RC');
   const [activeDirection, setActiveDirection] = useState<string | null>(null);
 
   const isArmed = telemetry.isArmed;
-  const rcDetected = telemetry.rcSignalDetected ?? connectionState.rcSignalDetected ?? false;
-
-  const handleModeSwitch = (mode: 'RC' | 'NO_RC') => {
-    if (controlMode === mode) return;
-    setControlModeState(mode);
-    mavlinkService.setControlMode(mode);
-  };
 
   const handleDirectionPress = (dir: 'FORWARD' | 'BACKWARD' | 'LEFT' | 'RIGHT' | 'HOLD') => {
     setActiveDirection(dir);
@@ -73,81 +63,31 @@ export const ControlModePanel: React.FC<ControlModePanelProps> = ({
 
   return (
     <div className="bg-slate-900/90 rounded-2xl border border-slate-800 p-3.5 sm:p-5 shadow-xl font-mono text-slate-100 space-y-4">
-      {/* 1. Header: Control Mode Toggle */}
+      {/* 1. Header: No RC Mode Operational Status */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
         <div className="flex items-center space-x-2.5">
           <div className="p-2 rounded-xl bg-sky-950/80 border border-sky-500/40 text-sky-400">
-            {controlMode === 'RC' ? <Radio className="w-5 h-5 animate-pulse" /> : <Gamepad2 className="w-5 h-5 text-emerald-400" />}
+            <Gamepad2 className="w-5 h-5 text-emerald-400" />
           </div>
           <div>
             <div className="text-xs sm:text-sm font-black uppercase tracking-wider text-slate-200">
               FLIGHT CONTROL INTERFACE
             </div>
             <div className="text-[10px] text-slate-400">
-              {controlMode === 'RC' ? 'Physical RC Transmitter Mode' : 'MAVLink Web Ground Station Control'}
+              MAVLink Web Ground Station Control
             </div>
           </div>
         </div>
 
-        {/* RC / NO-RC Selector Tabs */}
-        <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800 self-start sm:self-auto">
-          <button
-            type="button"
-            onClick={() => handleModeSwitch('RC')}
-            className={`px-4 py-1.5 rounded-lg text-xs font-black uppercase transition-all duration-150 flex items-center space-x-1.5 ${
-              controlMode === 'RC'
-                ? 'bg-purple-600 text-white shadow-md shadow-purple-900/30'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-            }`}
-          >
-            <Radio className="w-3.5 h-3.5" />
-            <span>RC MODE</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => handleModeSwitch('NO_RC')}
-            className={`px-4 py-1.5 rounded-lg text-xs font-black uppercase transition-all duration-150 flex items-center space-x-1.5 ${
-              controlMode === 'NO_RC'
-                ? 'bg-emerald-600 text-white shadow-md shadow-emerald-900/30'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-            }`}
-          >
-            <Gamepad2 className="w-3.5 h-3.5" />
-            <span>NO RC</span>
-          </button>
+        {/* Operating Only in No RC Mode */}
+        <div className="flex items-center bg-slate-950 px-3 py-1.5 rounded-xl border border-emerald-500/40 text-emerald-400 self-start sm:self-auto space-x-1.5 shadow-sm">
+          <Gamepad2 className="w-3.5 h-3.5 text-emerald-400" />
+          <span className="text-xs font-black uppercase tracking-wider">NO RC MODE</span>
         </div>
       </div>
 
-      {/* 2. Mode-Specific Panel Body */}
-      {controlMode === 'RC' ? (
-        /* ================= RC MODE DISPLAY ================= */
-        <div className="p-4 sm:p-6 bg-slate-950/90 rounded-xl border border-purple-500/30 space-y-4 text-center">
-          <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-purple-950/80 border border-purple-500/50 text-purple-300 text-xs font-bold uppercase">
-            <Radio className="w-3.5 h-3.5" />
-            <span>RC CONTROL ACTIVE</span>
-          </div>
-
-          <div className="max-w-md mx-auto space-y-2">
-            <div className={`p-3 rounded-xl border flex items-center justify-between text-xs ${
-              rcDetected 
-                ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300' 
-                : 'bg-slate-900 border-slate-800 text-slate-400'
-            }`}>
-              <div className="flex items-center space-x-2">
-                {rcDetected ? <CheckCircle2 className="w-4 h-4 text-emerald-400" /> : <AlertTriangle className="w-4 h-4 text-amber-400" />}
-                <span className="font-bold uppercase">RC SIGNAL:</span>
-              </div>
-              <span className="font-black">{rcDetected ? 'DETECTED ✓' : 'NOT DETECTED'}</span>
-            </div>
-
-            <p className="text-[11px] text-slate-400 leading-relaxed text-left">
-              Physical RC transmitter has primary flight authority. Ground Station provides live telemetry monitoring without sending overriding control setpoints.
-            </p>
-          </div>
-        </div>
-      ) : (
-        /* ================= NO-RC MODE INTERFACE ================= */
-        <div className="space-y-4">
+      {/* 2. NO-RC MODE INTERFACE */}
+      <div className="space-y-4">
           {/* A. UNIFIED MASTER MOTOR CONTROL (SINGLE DYNAMIC ARM/DISARM BUTTON + EMERGENCY CUTOFF) */}
           <div className="space-y-2">
             <div className="flex items-center justify-between px-1">
@@ -460,7 +400,6 @@ export const ControlModePanel: React.FC<ControlModePanelProps> = ({
             </div>
           </div>
         </div>
-      )}
-    </div>
-  );
-};
+      </div>
+    );
+  };

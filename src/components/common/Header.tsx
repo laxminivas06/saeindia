@@ -16,9 +16,12 @@ import {
   VolumeX, 
   Layers,
   History,
-  Smartphone
+  Smartphone,
+  Info,
+  X
 } from 'lucide-react';
 import { audioService } from '../../services/audioService';
+import { ThemeController } from './ThemeController';
 
 interface HeaderProps {
   currentRole: AppRole;
@@ -42,6 +45,7 @@ export const Header: React.FC<HeaderProps> = ({
   onResetMission
 }) => {
   const [muted, setMuted] = React.useState(audioService.getMuted());
+  const [showTeamInfo, setShowTeamInfo] = React.useState(false);
 
   const toggleMute = () => {
     const next = !muted;
@@ -97,6 +101,15 @@ export const Header: React.FC<HeaderProps> = ({
             </span>
             <span className="text-slate-500 text-[10px] hidden sm:inline">|</span>
             <span className="text-slate-400 font-medium text-[11px] hidden sm:inline">AUTONOMOUS RESCUE</span>
+            {/* Team Skycon info trigger badge */}
+            <button
+              onClick={() => setShowTeamInfo(true)}
+              className="ml-1 px-1.5 py-0.5 rounded bg-sky-950/60 hover:bg-sky-900/60 border border-sky-500/40 text-sky-300 text-[10px] font-mono font-bold flex items-center space-x-1 cursor-pointer transition"
+              title="Team & Project Info: Team Skycon (ADDC20260123)"
+            >
+              <Info className="w-3 h-3 text-sky-400" />
+              <span>Skycon</span>
+            </button>
           </div>
           <span className={`text-[10px] font-mono font-bold tracking-tight border px-1.5 py-0.2 rounded w-fit mt-0.5 ${getRoleBadgeColor()}`}>
             {getRoleLabel()}
@@ -147,8 +160,11 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* Right: Quick Action Buttons */}
+      {/* Right: Quick Action Buttons & Theme Controller */}
       <div className="flex items-center space-x-1.5 sm:space-x-2">
+        {/* App-Wide Theme Controller */}
+        <ThemeController />
+
         <button
           onClick={toggleMute}
           className={`p-1.5 sm:p-2 rounded border transition ${
@@ -179,6 +195,61 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
         )}
       </div>
+
+      {/* Project & Team Branding Modal */}
+      {showTeamInfo && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border-2 border-sky-500 rounded-2xl max-w-md w-full p-5 sm:p-6 space-y-4 font-mono text-slate-200 shadow-2xl relative">
+            <button
+              onClick={() => setShowTeamInfo(false)}
+              className="absolute top-4 right-4 p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-center space-x-2 text-sky-400 font-black text-sm uppercase tracking-wider border-b border-slate-800 pb-3">
+              <Info className="w-5 h-5 text-sky-400 shrink-0" />
+              <span>PROJECT &amp; TEAM SPECIFICATIONS</span>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1">
+                <div className="text-[10px] text-slate-400 uppercase font-bold">Institution</div>
+                <div className="text-white font-bold text-sm">Spurthi Engineering College</div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1">
+                  <div className="text-[10px] text-slate-400 uppercase font-bold">Team Name</div>
+                  <div className="text-sky-300 font-black text-sm">Skycon</div>
+                  <div className="text-[10px] text-slate-400">Team Skycon</div>
+                </div>
+
+                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1">
+                  <div className="text-[10px] text-slate-400 uppercase font-bold">Team ID</div>
+                  <div className="text-emerald-400 font-mono font-black text-sm">ADDC20260123</div>
+                  <div className="text-[10px] text-slate-400">SAE India Autonomous</div>
+                </div>
+              </div>
+
+              <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1">
+                <div className="text-[10px] text-slate-400 uppercase font-bold">Mission System</div>
+                <div className="text-slate-200 font-medium">SAE Portal for Autonomous Drone</div>
+                <div className="text-[10px] text-slate-400">Real-time MAVLink Telemetry • Autonomous Vision Search • Direct Runner ACK</div>
+              </div>
+            </div>
+
+            <div className="pt-2">
+              <button
+                onClick={() => setShowTeamInfo(false)}
+                className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs rounded-xl transition cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </header>
   );
 };
