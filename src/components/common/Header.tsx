@@ -57,6 +57,8 @@ export const Header: React.FC<HeaderProps> = ({
         return 'DRONE ANDROID MISSION CORE';
       case 'RUNNER':
         return 'RUNNER ANDROID FIELD UNIT';
+      case 'MANUAL':
+        return 'MANUAL CONTROL (OVERRIDE)';
       case 'TESTBENCH':
         return 'FIELD OPS SIMULATOR & TESTBENCH';
       default:
@@ -72,6 +74,8 @@ export const Header: React.FC<HeaderProps> = ({
         return 'bg-amber-500/20 text-amber-400 border-amber-500/40';
       case 'RUNNER':
         return 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40';
+      case 'MANUAL':
+        return 'bg-rose-500/20 text-rose-400 border-rose-500/40 animate-pulse';
       default:
         return 'bg-purple-500/20 text-purple-400 border-purple-500/40';
     }
