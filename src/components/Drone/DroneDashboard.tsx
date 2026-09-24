@@ -86,7 +86,7 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
   const isMissionCompleted = missionState === 'MISSION_COMPLETE';
   const isMissionAborted = missionState === 'EMERGENCY_RTL' || missionState === 'MISSION_TIMEOUT' || missionState === 'CONNECTION_LOST';
 
-  // Watch telemetry changes to clear in-progress arming state
+  // Watch telemetry and ACK changes to clear in-progress arming state or surface real-time ARM rejections
   useEffect(() => {
     if (telemetry.isArmed && isArmingInProgress) {
       setIsArmingInProgress(false);
@@ -96,7 +96,20 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
       setIsDisarmingInProgress(false);
       setArmError(null);
     }
-  }, [telemetry.isArmed, isArmingInProgress, isDisarmingInProgress]);
+    // If vehicle remains disarmed and Pixhawk sent a rejection ACK or pre-arm error while arming was in progress
+    if (isArmingInProgress && !telemetry.isArmed) {
+      const ack = pixhawkState.lastArmCommandAck || pixhawkState.lastCommandAck;
+      if (ack && ack.command === 400 && ack.result !== 0) {
+        setIsArmingInProgress(false);
+        const reason = pixhawkState.preArmFailReason || (pixhawkState.statusHistory && pixhawkState.statusHistory.length > 0 ? pixhawkState.statusHistory[0].text : undefined);
+        const failMsg = `ARM REJECTED by Pixhawk (${ack.resultName || 'FAILED'})${reason ? ` — ${reason}` : ''}`;
+        setArmError(failMsg);
+      } else if (pixhawkState.preArmFailReason) {
+        setIsArmingInProgress(false);
+        setArmError(`ARM BLOCKED: ${pixhawkState.preArmFailReason}`);
+      }
+    }
+  }, [telemetry.isArmed, isArmingInProgress, isDisarmingInProgress, pixhawkState.lastArmCommandAck, pixhawkState.preArmFailReason]);
 
   // Handler: Explicit Real ARM Command
   const handleArmClick = async () => {
@@ -112,13 +125,14 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
         return;
       }
 
-      // 4-second watchdog for telemetry confirmation
+      // Watchdog timeout fallback (4 seconds)
       setTimeout(() => {
         if (!mavlinkService.getTelemetry().isArmed) {
           setIsArmingInProgress(false);
-          const lastAck = pixhawkState.lastArmCommandAck || pixhawkState.lastCommandAck;
-          const preArmReason = pixhawkState.preArmFailReason ||
-            (pixhawkState.statusHistory && pixhawkState.statusHistory.length > 0 ? pixhawkState.statusHistory[0].text : undefined);
+          const currentPixState = mavlinkService.getConnectionState();
+          const lastAck = currentPixState.lastArmCommandAck || currentPixState.lastCommandAck;
+          const preArmReason = currentPixState.preArmFailReason ||
+            (currentPixState.statusHistory && currentPixState.statusHistory.length > 0 ? currentPixState.statusHistory[0].text : undefined);
 
           if (lastAck && lastAck.command === 400 && lastAck.result !== 0) {
             let failMsg = `ARM REJECTED (${lastAck.resultName} / Code ${lastAck.result})`;
@@ -126,8 +140,10 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
               failMsg += ` — ${preArmReason}`;
             }
             setArmError(failMsg);
+          } else if (preArmReason) {
+            setArmError(`ARM REJECTED: ${preArmReason}`);
           } else {
-            setArmError('ARM ACK TIMEOUT (Waiting for vehicle armed state)');
+            setArmError('ARM ACK TIMEOUT (Waiting for vehicle armed confirmation)');
           }
         }
       }, 4000);
@@ -257,15 +273,15 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
 
             {/* Error Message Toast / Alert */}
             {armError && (
-              <div className="p-2 bg-rose-950/90 border border-rose-500/80 rounded-lg text-rose-200 text-[11px] flex items-center justify-between space-x-2">
-                <div className="flex items-center space-x-1.5 min-w-0">
-                  <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-                  <span className="truncate">{armError}</span>
+              <div className="p-2.5 bg-rose-950/95 border border-rose-500 rounded-lg text-rose-200 text-xs flex items-start justify-between space-x-2 shadow-lg">
+                <div className="flex items-start space-x-2 min-w-0">
+                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                  <span className="font-mono break-words leading-tight">{armError}</span>
                 </div>
                 <button
                   type="button"
                   onClick={() => setArmError(null)}
-                  className="text-slate-400 hover:text-white text-xs shrink-0 cursor-pointer"
+                  className="text-slate-400 hover:text-white text-xs shrink-0 cursor-pointer p-0.5"
                 >
                   ✕
                 </button>

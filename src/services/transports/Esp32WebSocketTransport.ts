@@ -63,10 +63,15 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
           this.connectionMode = savedMode;
         }
 
-        if (savedHost && savedHost !== '192.168.4.1') {
+        if (savedHost && savedHost === '192.168.31.194') {
           this.localHost = savedHost;
         } else {
           this.localHost = '192.168.31.194';
+          try {
+            localStorage.setItem('esp32_host', '192.168.31.194');
+          } catch (e) {
+            // ignore
+          }
         }
         if (savedPort) this.localPort = parseInt(savedPort, 10) || 8080;
         if (savedSecureEndpoint) this.secureEndpoint = savedSecureEndpoint;

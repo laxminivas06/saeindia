@@ -148,72 +148,119 @@ export const ControlModePanel: React.FC<ControlModePanelProps> = ({
       ) : (
         /* ================= NO-RC MODE INTERFACE ================= */
         <div className="space-y-4">
-          {/* A. ARM & DISARM BUTTONS (SPACED APART & TOUCH-SAFE) */}
-          <div className="grid grid-cols-2 gap-3 sm:gap-4">
-            {/* ARM BUTTON */}
-            <button
-              type="button"
-              onClick={onArmClick}
-              disabled={isArmed || isArmingInProgress || isDisarmingInProgress || !connectionState.isConnected}
-              className={`py-3.5 sm:py-4 px-4 rounded-xl font-black text-sm sm:text-base uppercase tracking-wider flex items-center justify-center space-x-2 border transition-all duration-150 ${
-                isArmed
-                  ? 'bg-slate-900 border-slate-800 text-slate-600 cursor-not-allowed opacity-50'
-                  : isArmingInProgress
-                  ? 'bg-amber-950 border-amber-500 text-amber-300 animate-pulse cursor-wait'
-                  : !connectionState.isConnected
-                  ? 'bg-slate-900 border-slate-800 text-slate-500 cursor-not-allowed'
-                  : 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-400 shadow-lg shadow-emerald-950/50 active:scale-[0.98] cursor-pointer'
-              }`}
-            >
-              <ShieldCheck className="w-5 h-5 shrink-0" />
-              <span>{isArmingInProgress ? 'ARMING...' : isArmed ? 'ARMED' : 'ARM MOTORS'}</span>
-            </button>
+          {/* A. UNIFIED MASTER MOTOR CONTROL (SINGLE DYNAMIC ARM/DISARM BUTTON + EMERGENCY CUTOFF) */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between px-1">
+              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                MOTOR POWER CONTROL
+              </span>
+              <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full flex items-center space-x-1.5 transition-all ${
+                isArmed 
+                  ? 'bg-rose-950/90 text-rose-300 border border-rose-500/70 shadow-lg shadow-rose-950/50 animate-pulse' 
+                  : 'bg-emerald-950/80 text-emerald-300 border border-emerald-500/40'
+              }`}>
+                <span className={`w-2 h-2 rounded-full ${isArmed ? 'bg-rose-400 animate-ping' : 'bg-emerald-400'}`} />
+                <span>{isArmed ? 'ARMED • MOTORS LIVE' : 'DISARMED • STANDBY'}</span>
+              </span>
+            </div>
 
-            {/* DISARM BUTTON */}
-            <button
-              type="button"
-              onClick={onDisarmClick}
-              disabled={!isArmed || isArmingInProgress || isDisarmingInProgress || !connectionState.isConnected}
-              className={`py-3.5 sm:py-4 px-4 rounded-xl font-black text-sm sm:text-base uppercase tracking-wider flex items-center justify-center space-x-2 border transition-all duration-150 ${
-                !isArmed
-                  ? 'bg-slate-900 border-slate-800 text-slate-600 cursor-not-allowed opacity-50'
-                  : isDisarmingInProgress
-                  ? 'bg-amber-950 border-amber-500 text-amber-300 animate-pulse cursor-wait'
-                  : !connectionState.isConnected
-                  ? 'bg-slate-900 border-slate-800 text-slate-500 cursor-not-allowed'
-                  : 'bg-rose-600 hover:bg-rose-500 text-white border-rose-400 shadow-lg shadow-rose-950/50 active:scale-[0.98] cursor-pointer'
-              }`}
-            >
-              <Power className="w-5 h-5 shrink-0" />
-              <span>{isDisarmingInProgress ? 'DISARMING...' : 'DISARM'}</span>
-            </button>
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+              {/* PRIMARY UNIFIED TOGGLE BUTTON: ARM when disarmed, DISARM when armed */}
+              <button
+                type="button"
+                onClick={isArmed ? onDisarmClick : onArmClick}
+                disabled={isArmingInProgress || isDisarmingInProgress || (!connectionState.isConnected && !connectionState.isUsbConnected)}
+                className={`sm:col-span-3 py-4 px-4 rounded-xl font-black text-sm sm:text-base uppercase tracking-wider flex items-center justify-center space-x-2.5 border transition-all duration-150 shadow-lg cursor-pointer ${
+                  !connectionState.isConnected && !connectionState.isUsbConnected
+                    ? 'bg-slate-900 border-slate-800 text-slate-500 cursor-not-allowed shadow-none'
+                    : isArmingInProgress
+                    ? 'bg-amber-600 border-amber-400 text-white animate-pulse cursor-wait'
+                    : isDisarmingInProgress
+                    ? 'bg-amber-700 border-amber-500 text-white animate-pulse cursor-wait'
+                    : isArmed
+                    ? 'bg-rose-600 hover:bg-rose-500 text-white border-rose-400 shadow-rose-950/60 ring-2 ring-rose-400/50 active:scale-[0.98]'
+                    : 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-400 shadow-emerald-950/60 ring-2 ring-emerald-400/40 active:scale-[0.98]'
+                }`}
+              >
+                {isArmed ? (
+                  <>
+                    <Power className="w-5 h-5 shrink-0" />
+                    <span>{isDisarmingInProgress ? 'DISARMING MOTORS...' : 'DISARM MOTORS (CLICK TO STOP)'}</span>
+                  </>
+                ) : (
+                  <>
+                    <ShieldCheck className="w-5 h-5 shrink-0" />
+                    <span>{isArmingInProgress ? 'ARMING MOTORS...' : 'ARM MOTORS (CLICK TO SPIN)'}</span>
+                  </>
+                )}
+              </button>
+
+              {/* EMERGENCY FORCE DISARM / CUTOFF BUTTON */}
+              <button
+                type="button"
+                onClick={() => {
+                  mavlinkService.sendDisarmCommand(true);
+                  onDisarmClick();
+                }}
+                disabled={!connectionState.isConnected && !connectionState.isUsbConnected}
+                title="Instant hardware emergency motor cutoff (MAVLink param2=21196 force disarm)"
+                className="sm:col-span-1 py-4 px-3 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center space-x-1.5 border border-rose-800/80 bg-rose-950/70 hover:bg-rose-900 text-rose-300 hover:text-white transition active:scale-[0.98] cursor-pointer"
+              >
+                <Power className="w-4 h-4 shrink-0 text-rose-400" />
+                <span className="leading-tight text-center">FORCE<br className="hidden sm:inline" /> CUTOFF</span>
+              </button>
+            </div>
           </div>
 
           {/* Real-time Pre-Arm Rejection / Safety Switch Status Banner */}
-          {connectionState.preArmFailReason && !isArmed && (
-            <div className="p-3 rounded-xl bg-rose-950/80 border border-rose-500/70 text-rose-200 text-xs space-y-1.5 shadow-lg">
-              <div className="flex items-start space-x-2">
-                <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-                <div>
-                  <strong className="text-rose-300 uppercase">Pixhawk Pre-Arm Check Rejection:</strong>
-                  <div className="font-mono text-white text-[11px] mt-0.5 bg-black/50 p-2 rounded border border-rose-500/40 select-all">
-                    {connectionState.preArmFailReason}
+          {(connectionState.preArmFailReason || (connectionState.lastArmCommandAck && connectionState.lastArmCommandAck.result !== 0)) && !isArmed && (() => {
+            const reason = connectionState.preArmFailReason || (connectionState.lastArmAckResult || `Command 400 Rejected: ${connectionState.lastArmCommandAck?.resultName || 'FAILED'}`);
+            const lower = reason.toLowerCase();
+            return (
+              <div className="p-3.5 rounded-xl bg-rose-950/90 border border-rose-500 text-rose-200 text-xs space-y-2 shadow-xl animate-in fade-in">
+                <div className="flex items-start space-x-2">
+                  <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+                  <div className="w-full">
+                    <strong className="text-rose-300 uppercase tracking-wide flex items-center justify-between">
+                      <span>Pixhawk Pre-Arm Rejection:</span>
+                      <span className="text-[10px] bg-rose-900/60 text-rose-300 px-1.5 py-0.5 rounded border border-rose-600/40">ARM FAILED</span>
+                    </strong>
+                    <div className="font-mono text-white text-xs mt-1 bg-black/60 p-2.5 rounded-lg border border-rose-500/50 select-all font-bold">
+                      {reason}
+                    </div>
                   </div>
                 </div>
+
+                <div className="text-[11px] text-rose-200 space-y-1.5 pt-1.5 border-t border-rose-500/30">
+                  {/* MicroSD / Logging check guidance */}
+                  {lower.includes('log') && (
+                    <div className="bg-amber-950/70 p-2.5 rounded-lg border border-amber-500/60 text-amber-200 space-y-1">
+                      <div className="font-bold text-amber-300 flex items-center space-x-1.5">
+                        <span>💾 MicroSD Logging Check Failed (ARMING_CHECK):</span>
+                      </div>
+                      <div className="text-[11px] leading-relaxed">
+                        ArduPilot requires an operational MicroSD card to record flight data logs before arming.
+                      </div>
+                      <div className="text-[10px] text-amber-100 bg-black/40 p-2 rounded border border-amber-600/30 space-y-1 font-mono">
+                        <div>• <strong>Solution A (Hardware):</strong> Insert a FAT32 formatted MicroSD card into the Pixhawk's SD slot.</div>
+                        <div>• <strong>Solution B (Mission Planner):</strong> Go to <strong>Config &gt; Full Parameter List</strong> &gt; set <code>ARMING_CHECK = 0</code> (or uncheck "Logging" in Standard Params) &gt; click <strong>Write Params</strong>.</div>
+                      </div>
+                    </div>
+                  )}
+
+                  {lower.includes('switch') && (
+                    <div>• <strong>Physical Safety Switch:</strong> Press &amp; hold the Pixhawk safety button for 3 seconds until the LED turns solid red.</div>
+                  )}
+                  {lower.includes('compass') && (
+                    <div>• <strong>Compass / Mag:</strong> Keep away from indoor metal objects or perform compass calibration in Mission Planner.</div>
+                  )}
+                  {(lower.includes('fix') || lower.includes('gps')) && (
+                    <div>• <strong>GPS Fix:</strong> Selected mode requires 3D GPS fix. For indoor/bench testing, switch mode to <strong className="text-emerald-300 underline font-bold">ALT_HOLD</strong> or <strong className="text-emerald-300 underline font-bold">STABILIZE</strong> below (no GPS required).</div>
+                  )}
+                </div>
               </div>
-              <div className="text-[10px] text-rose-300/90 space-y-0.5 pt-1 border-t border-rose-500/30">
-                {connectionState.preArmFailReason.toLowerCase().includes('switch') && (
-                  <div>• <strong>Physical Safety Switch:</strong> Press &amp; hold the Pixhawk safety button for 3 seconds until the LED turns solid red.</div>
-                )}
-                {connectionState.preArmFailReason.toLowerCase().includes('compass') && (
-                  <div>• <strong>Compass / Mag:</strong> Keep away from indoor metal objects or perform compass calibration in Mission Planner.</div>
-                )}
-                {connectionState.preArmFailReason.toLowerCase().includes('fix') || connectionState.preArmFailReason.toLowerCase().includes('gps') ? (
-                  <div>• <strong>GPS Fix:</strong> Mode requires 3D GPS fix. For indoor/bench testing, switch mode to <strong className="text-emerald-300 underline">STABILIZE</strong> or <strong className="text-emerald-300 underline">ALT_HOLD</strong> below.</div>
-                ) : null}
-              </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Flight Mode Quick Selector */}
           <div className="p-2.5 bg-slate-950 rounded-xl border border-slate-800 space-y-1.5">
@@ -227,10 +274,10 @@ export const ControlModePanel: React.FC<ControlModePanelProps> = ({
                   key={mode}
                   type="button"
                   onClick={() => mavlinkService.setFlightMode(mode)}
-                  disabled={!connectionState.isConnected}
+                  disabled={!connectionState.isConnected && !connectionState.isUsbConnected}
                   className={`py-1.5 px-1 rounded-lg text-[10px] transition cursor-pointer font-bold ${
                     (telemetry.flightMode || '').toUpperCase() === mode
-                      ? 'bg-emerald-600 text-white shadow'
+                      ? 'bg-emerald-600 text-white shadow ring-2 ring-emerald-400'
                       : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700'
                   }`}
                 >

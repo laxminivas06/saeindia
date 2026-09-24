@@ -82,16 +82,28 @@ export const PreArmChecksPanel: React.FC<PreArmChecksPanelProps> = ({
   // 2. Hardware Pre-Arm Failures from ArduPilot STATUSTEXT
   const preArmMessages: PixhawkStatusMessage[] = (connectionState.statusHistory || []).filter((msg) => {
     const text = (msg.text || '').toLowerCase();
-    return text.includes('prearm') || text.includes('arming') || text.includes('compass') || text.includes('ahrs') || text.includes('battery') || text.includes('ekf') || text.includes('mag');
+    return text.includes('prearm') || text.includes('arm') || text.includes('log') || text.includes('fail') || text.includes('check') || text.includes('compass') || text.includes('ahrs') || text.includes('battery') || text.includes('ekf') || text.includes('mag') || text.includes('switch');
   });
 
-  if (connectionState.preArmFailReason && !telemetry.isArmed) {
+  const failureReason = connectionState.preArmFailReason || (connectionState.lastArmCommandAck && connectionState.lastArmCommandAck.result !== 0 ? (connectionState.lastArmAckResult || `Command 400 Rejected: ${connectionState.lastArmCommandAck.resultName}`) : null);
+
+  if (failureReason && !telemetry.isArmed) {
+    const lower = failureReason.toLowerCase();
+    let remediation = '';
+    if (lower.includes('log')) {
+      remediation = ' [Remedy: Insert formatted FAT32 MicroSD card into Pixhawk, or set ARMING_CHECK = 0 in Mission Planner]';
+    } else if (lower.includes('switch')) {
+      remediation = ' [Remedy: Hold Pixhawk safety switch for 3 seconds until solid red]';
+    } else if (lower.includes('compass')) {
+      remediation = ' [Remedy: Calibrate compass in Mission Planner or move away from indoor metal objects]';
+    }
+
     items.push({
       id: 'ardu_prearm_fail',
       category: 'ARDUPILOT FC PRE-ARM',
       title: 'Pre-Arm Safety Check Rejected by Pixhawk',
-      description: connectionState.preArmFailReason,
-      rawMessage: connectionState.preArmFailReason,
+      description: `${failureReason}${remediation}`,
+      rawMessage: failureReason,
       status: 'BLOCKING'
     });
   }

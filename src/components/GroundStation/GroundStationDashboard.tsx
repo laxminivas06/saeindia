@@ -104,23 +104,31 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
         setIsArming(false);
         setArmFeedback(null);
         clearInterval(watchdog);
-      } else if (Date.now() - startWait > 4500) {
-        setIsArming(false);
-        clearInterval(watchdog);
-        if (!mavlinkService.getTelemetry().isArmed) {
-          const lastAck = pixhawkState.lastArmCommandAck;
-          if (lastAck && lastAck.result !== 0) {
-            const preArmReason = pixhawkState.preArmFailReason || 
-              (pixhawkState.statusHistory && pixhawkState.statusHistory.length > 0 ? pixhawkState.statusHistory[0].text : undefined);
-            let failMsg = `ARM REJECTED (${lastAck.resultName})`;
-            if (preArmReason) failMsg += ` — ${preArmReason}`;
-            setArmFeedback(failMsg);
+      } else {
+        const currentPixState = mavlinkService.getConnectionState();
+        const lastAck = currentPixState.lastArmCommandAck || currentPixState.lastCommandAck;
+        if (lastAck && lastAck.command === 400 && lastAck.result !== 0) {
+          setIsArming(false);
+          clearInterval(watchdog);
+          const preArmReason = currentPixState.preArmFailReason || 
+            (currentPixState.statusHistory && currentPixState.statusHistory.length > 0 ? currentPixState.statusHistory[0].text : undefined);
+          let failMsg = `ARM REJECTED by Pixhawk (${lastAck.resultName || 'FAILED'})`;
+          if (preArmReason) failMsg += ` — ${preArmReason}`;
+          setArmFeedback(failMsg);
+          return;
+        }
+        if (Date.now() - startWait > 4500) {
+          setIsArming(false);
+          clearInterval(watchdog);
+          const preArmReason = currentPixState.preArmFailReason;
+          if (preArmReason) {
+            setArmFeedback(`ARM REJECTED: ${preArmReason}`);
           } else {
-            setArmFeedback('ARM ACK TIMEOUT (Waiting for vehicle armed state)');
+            setArmFeedback('ARM ACK TIMEOUT (Waiting for vehicle armed confirmation)');
           }
         }
       }
-    }, 250);
+    }, 200);
   };
 
   // Dedicated DISARM Handler (MAV_CMD_COMPONENT_ARM_DISARM param1=0.0 param2=0.0)

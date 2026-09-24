@@ -56,22 +56,17 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
   const [esp32PingResult, setEsp32PingResult] = useState<{ reachable: boolean; latencyMs?: number; message?: string } | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [showEsp32Guide, setShowEsp32Guide] = useState(false);
-  const [showChangeWifiModal, setShowChangeWifiModal] = useState(false);
   const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
-  const [showResetWifiConfirm, setShowResetWifiConfirm] = useState(false);
   const [showDevDetails, setShowDevDetails] = useState(false);
   const [selectedBaud, setSelectedBaud] = useState<number>(connectionState.baudRate || 57600);
   
-  // Wi-Fi Configuration State
-  const [wifiSsid, setWifiSsid] = useState<string>(() => {
+  // Wi-Fi Display State (managed directly on ESP32 web portal)
+  const [wifiSsid] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('esp32_wifi_ssid') || 'DRONE_WIFI_2.4G';
     }
     return 'DRONE_WIFI_2.4G';
   });
-  const [newWifiSsid, setNewWifiSsid] = useState<string>('');
-  const [newWifiPassword, setNewWifiPassword] = useState<string>('');
-  const [wifiSaveSuccess, setWifiSaveSuccess] = useState<boolean>(false);
 
   // Connection Transport Method: 'ESP32' | 'USB' | 'SIM'
   const [connectionMethod, setConnectionMethod] = useState<'ESP32' | 'USB' | 'SIM'>(() => {
@@ -92,8 +87,11 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
   // Local ESP32 IP & Port settings (LOCAL HTTP Mode)
   const [esp32Host, setEsp32Host] = useState<string>(() => {
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('esp32_host');
-      if (saved && saved !== '192.168.4.1') return saved;
+      try {
+        localStorage.setItem('esp32_host', '192.168.31.194');
+      } catch (e) {
+        // ignore
+      }
       return '192.168.31.194';
     }
     return '192.168.31.194';
@@ -132,10 +130,10 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
     ? `wss://${esp32SecureEndpoint.replace(/^wss?:\/\//i, '')}`
     : `ws://${esp32Host}:${esp32Port}`;
 
-  // Granular Stage Flags
+  // Granular Stage Flags - Stable 10s loss threshold to prevent rapid connecting/disconnecting flapping
   const isWebSocketOpen = isUsbConnected && connectionState.connectionType === 'ESP32_WEBSOCKET';
-  const isMavlinkHeartbeatReceived = isConnected && connectionState.lastHeartbeat > 0 && (Date.now() - connectionState.lastHeartbeat < 4500);
-  const isHeartbeatTimeout = phase === 'HEARTBEAT_TIMEOUT' || phase === 'NO_MAVLINK_HEARTBEAT' || (isConnected && Date.now() - connectionState.lastHeartbeat > 4500);
+  const isMavlinkHeartbeatReceived = isConnected && connectionState.lastHeartbeat > 0 && (Date.now() - connectionState.lastHeartbeat < 10000);
+  const isHeartbeatTimeout = phase === 'HEARTBEAT_TIMEOUT' || phase === 'NO_MAVLINK_HEARTBEAT' || (isConnected && Date.now() - connectionState.lastHeartbeat > 10000);
   const isWaitingMavlink = (phase === 'WAITING_FOR_MAVLINK' || phase === 'WAITING_FOR_HEARTBEAT' || phase === 'SERIAL_OPEN') && !isConnected;
 
   // Active Connection State per Mode
@@ -256,26 +254,7 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
     await mavlinkService.disconnect();
   };
 
-  const handleSaveWifiConfig = () => {
-    if (!newWifiSsid.trim()) return;
-    const ssid = newWifiSsid.trim();
-    setWifiSsid(ssid);
-    mavlinkService.setWifiSsid(ssid);
-    setWifiSaveSuccess(true);
-    setTimeout(() => {
-      setWifiSaveSuccess(false);
-      setShowChangeWifiModal(false);
-      setNewWifiSsid('');
-      setNewWifiPassword('');
-    }, 1200);
-  };
 
-  const handleConfirmResetWifi = () => {
-    setShowResetWifiConfirm(false);
-    setShowChangeWifiModal(false);
-    setWifiSsid('');
-    mavlinkService.resetWifi();
-  };
 
   const handleBaudChange = (newBaud: number) => {
     setSelectedBaud(newBaud);
@@ -487,14 +466,17 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
               </div>
 
               <div className="flex items-center space-x-2">
-                {/* Separate CHANGE WIFI button */}
-                <button
-                  onClick={() => setShowChangeWifiModal(true)}
-                  className="text-[11px] px-2.5 py-1 bg-purple-900/60 hover:bg-purple-800 text-purple-200 rounded-lg border border-purple-500/40 flex items-center space-x-1 cursor-pointer transition font-bold"
+                {/* Direct link to ESP32 Webpage for Wi-Fi and setup */}
+                <a
+                  href={`http://${esp32Host}/`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[11px] px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-purple-300 hover:text-purple-100 rounded-lg border border-purple-500/40 flex items-center space-x-1 cursor-pointer transition font-bold"
+                  title="Open ESP32 Configuration Webpage"
                 >
-                  <Wifi className="w-3.5 h-3.5 text-purple-300" />
-                  <span>CHANGE WIFI</span>
-                </button>
+                  <ExternalLink className="w-3.5 h-3.5 text-purple-400" />
+                  <span>ESP32 Webpage</span>
+                </a>
 
                 {esp32Mode === 'LOCAL' && (
                   <button
@@ -1210,162 +1192,7 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* MODAL 2: CHANGE WIFI & RESET WIFI CONFIGURATION MODAL                     */}
-      {/* ========================================================================= */}
-      {showChangeWifiModal && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-5 font-mono select-none">
-          <div className="bg-slate-900 border-2 border-purple-500/60 rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-4 sm:p-6 shadow-2xl space-y-4">
-            
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-              <div className="flex items-center space-x-2.5">
-                <div className="p-2 bg-purple-950 rounded-xl border border-purple-500/50 text-purple-400">
-                  <Wifi className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-black text-sm sm:text-base text-white uppercase tracking-wider">
-                    Wi-Fi Network Configuration
-                  </h3>
-                  <p className="text-xs text-purple-300">Configure ESP32 Wi-Fi Association</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowChangeWifiModal(false)}
-                className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs transition cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
 
-            {/* Current Wi-Fi Status Banner */}
-            <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs space-y-1">
-              <div className="text-slate-400 font-bold uppercase text-[10px]">Current Configured Network:</div>
-              <div className="font-mono text-emerald-400 font-bold flex items-center space-x-1.5">
-                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span>{wifiSsid || 'No Wi-Fi Configured'}</span>
-              </div>
-            </div>
-
-            {wifiSaveSuccess && (
-              <div className="p-2.5 bg-emerald-950/80 border border-emerald-500/60 rounded-xl text-emerald-300 text-xs flex items-center space-x-1.5">
-                <CheckCircle2 className="w-4 h-4 shrink-0" />
-                <span>Wi-Fi SSID updated &amp; saved successfully ✓</span>
-              </div>
-            )}
-
-            {/* Change SSID Form */}
-            <div className="space-y-3 pt-1">
-              <div className="text-xs font-bold uppercase text-slate-300">
-                Configure New Wi-Fi Network:
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-[10px] text-slate-400 font-bold uppercase">Wi-Fi SSID (2.4 GHz):</label>
-                <input
-                  type="text"
-                  value={newWifiSsid}
-                  onChange={(e) => setNewWifiSsid(e.target.value)}
-                  placeholder="e.g. Home_Network_2.4G"
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-purple-500"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-[10px] text-slate-400 font-bold uppercase">Password (Optional / Open):</label>
-                <input
-                  type="password"
-                  value={newWifiPassword}
-                  onChange={(e) => setNewWifiPassword(e.target.value)}
-                  placeholder="Wi-Fi Password"
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-purple-500"
-                />
-              </div>
-
-              <div className="p-3 bg-purple-950/30 border border-purple-500/30 rounded-xl text-[11px] text-slate-300 space-y-1">
-                <strong className="text-purple-300">How to provision ESP32 via Setup AP:</strong>
-                <div>1. Power on ESP32-S3 and connect phone to <strong className="text-purple-300">DRONE_ESP</strong> AP.</div>
-                <div>2. Open <strong className="text-emerald-400">http://192.168.4.1</strong> in browser to scan &amp; save Wi-Fi.</div>
-                <div>3. Reconnect phone to the same Wi-Fi and tap CONNECT.</div>
-              </div>
-
-              <div className="flex items-center space-x-2 pt-2">
-                <button
-                  onClick={handleSaveWifiConfig}
-                  disabled={!newWifiSsid.trim()}
-                  className={`flex-1 py-2.5 rounded-xl font-bold text-xs transition flex items-center justify-center space-x-1.5 ${
-                    newWifiSsid.trim()
-                      ? 'bg-purple-600 hover:bg-purple-500 text-white shadow-lg shadow-purple-600/30 cursor-pointer'
-                      : 'bg-slate-800 text-slate-500 cursor-not-allowed'
-                  }`}
-                >
-                  <Check className="w-4 h-4" />
-                  <span>SAVE &amp; UPDATE WIFI</span>
-                </button>
-              </div>
-
-              {/* Explicit RESET WIFI action */}
-              <div className="pt-3 border-t border-slate-800 flex items-center justify-between">
-                <div>
-                  <div className="text-xs font-bold text-rose-400 uppercase">Erase Wi-Fi Configuration</div>
-                  <p className="text-[10px] text-slate-500">Resets ESP32 back to factory DRONE_ESP Access Point mode.</p>
-                </div>
-                <button
-                  onClick={() => setShowResetWifiConfirm(true)}
-                  className="px-3 py-1.5 bg-rose-950/70 hover:bg-rose-900 border border-rose-500/50 text-rose-300 font-bold rounded-lg text-[11px] transition flex items-center space-x-1 cursor-pointer"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  <span>RESET WIFI</span>
-                </button>
-              </div>
-
-            </div>
-
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* MODAL 3: RESET WIFI CONFIRMATION MODAL                                    */}
-      {/* ========================================================================= */}
-      {showResetWifiConfirm && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 font-mono select-none">
-          <div className="bg-slate-900 border-2 border-rose-500/80 rounded-2xl max-w-md w-full p-4 sm:p-6 space-y-4 text-slate-200 shadow-2xl">
-            <div className="flex items-start space-x-3">
-              <div className="p-2.5 bg-rose-950 border border-rose-500 rounded-xl text-rose-400 shrink-0">
-                <AlertTriangle className="w-6 h-6" />
-              </div>
-              <div>
-                <h3 className="text-base font-black text-white uppercase tracking-wide">
-                  Erase &amp; Reset Wi-Fi?
-                </h3>
-                <p className="text-xs text-rose-300 mt-1">
-                  This will erase the saved Wi-Fi SSID and disconnect from the network.
-                </p>
-              </div>
-            </div>
-
-            <p className="text-[11px] text-slate-300 leading-relaxed bg-slate-950 p-3 rounded-xl border border-slate-800">
-              Only perform this if you intend to re-provision the ESP32 using the <strong className="text-purple-300">DRONE_ESP</strong> Access Point (http://192.168.4.1).
-            </p>
-
-            <div className="flex items-center space-x-2 pt-2">
-              <button
-                onClick={() => setShowResetWifiConfirm(false)}
-                className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition cursor-pointer"
-              >
-                CANCEL
-              </button>
-              <button
-                onClick={handleConfirmResetWifi}
-                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-black text-xs rounded-xl transition flex items-center justify-center space-x-1.5 shadow-lg shadow-rose-600/30 cursor-pointer"
-              >
-                <Trash2 className="w-4 h-4" />
-                <span>CONFIRM RESET</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ========================================================================= */}
       {/* MODAL 4: ESP32-S3 PROVISIONING, WIRING & PRODUCTION WSS ARCHITECTURE MODAL */}
