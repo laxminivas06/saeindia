@@ -106,7 +106,7 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
     try {
       const res = await mavlinkService.sendArmCommand();
       if (!res) {
-        setArmError('Arm command transmission failed: Check connection.');
+        setArmError('ARM TRANSMISSION FAILED: Check WebSocket / ESP32 TX Link.');
         setIsArmingInProgress(false);
         return;
       }

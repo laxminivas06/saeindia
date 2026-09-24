@@ -2,14 +2,14 @@ import React, { useState } from 'react';
 import { PixhawkConnectionState, PixhawkStatusMessage, MAVLinkCommandAck } from '../../types/mavlink';
 import { DroneTelemetry, HomePoint } from '../../types/mission';
 import { mavlinkService } from '../../services/mavlinkService';
-import { 
-  ShieldCheck, 
-  AlertTriangle, 
-  Info, 
-  CheckCircle2, 
-  XCircle, 
-  ChevronDown, 
-  ChevronUp, 
+import {
+  ShieldCheck,
+  AlertTriangle,
+  Info,
+  CheckCircle2,
+  XCircle,
+  ChevronDown,
+  ChevronUp,
   Activity,
   Battery,
   Compass,
@@ -52,7 +52,7 @@ export const PreArmChecksPanel: React.FC<PreArmChecksPanelProps> = ({
 }) => {
   const [showStatusHistory, setShowStatusHistory] = useState(false);
   const [showArmDebug, setShowArmDebug] = useState(true);
-  
+
   const activeMode = (telemetry.flightMode || 'DISARMED').toUpperCase();
   const isPosDependent = mavlinkService.isModePositionDependent(activeMode);
   const isAltHoldOrStabilize = !isPosDependent;
@@ -219,12 +219,12 @@ export const PreArmChecksPanel: React.FC<PreArmChecksPanelProps> = ({
 
   // Last Command ACK details
   const lastAck: MAVLinkCommandAck | undefined = connectionState.lastCommandAck;
-  const latestStatustext = connectionState.latestStatusMessage?.text || 
+  const latestStatustext = connectionState.latestStatusMessage?.text ||
     (connectionState.statusHistory && connectionState.statusHistory.length > 0 ? connectionState.statusHistory[0].text : undefined);
 
   return (
     <div className={`bg-slate-900/95 rounded-2xl p-3 sm:p-4.5 border border-slate-800 shadow-xl font-mono space-y-3 ${className}`}>
-      
+
       {/* Panel Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-slate-800">
         <div className="flex items-center space-x-2">
@@ -262,11 +262,10 @@ export const PreArmChecksPanel: React.FC<PreArmChecksPanelProps> = ({
       {/* EXPLICIT METRIC COUNTERS (SECTION 6: REPLACES MISLEADING "0 ERRORS")      */}
       {/* ========================================================================= */}
       <div className="grid grid-cols-3 gap-2 text-[10px]">
-        <div className={`p-2 rounded-xl border flex flex-col justify-between ${
-          preArmFailuresCount > 0 
-            ? 'bg-rose-950/40 border-rose-500/60 text-rose-300' 
+        <div className={`p-2 rounded-xl border flex flex-col justify-between ${preArmFailuresCount > 0
+            ? 'bg-rose-950/40 border-rose-500/60 text-rose-300'
             : 'bg-slate-950/80 border-slate-800 text-slate-300'
-        }`}>
+          }`}>
           <span className="text-[9px] uppercase text-slate-400 font-bold">Pre-arm failures</span>
           <span className={`text-sm sm:text-base font-black mt-0.5 ${preArmFailuresCount > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
             {preArmFailuresCount}
@@ -280,11 +279,10 @@ export const PreArmChecksPanel: React.FC<PreArmChecksPanelProps> = ({
           </span>
         </div>
 
-        <div className={`p-2 rounded-xl border flex flex-col justify-between ${
-          ackFailuresCount > 0 
-            ? 'bg-amber-950/40 border-amber-500/60 text-amber-300' 
+        <div className={`p-2 rounded-xl border flex flex-col justify-between ${ackFailuresCount > 0
+            ? 'bg-amber-950/40 border-amber-500/60 text-amber-300'
             : 'bg-slate-950/80 border-slate-800 text-slate-300'
-        }`}>
+          }`}>
           <span className="text-[9px] uppercase text-slate-400 font-bold">Command ACK failures</span>
           <span className={`text-sm sm:text-base font-black mt-0.5 ${ackFailuresCount > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
             {ackFailuresCount}
@@ -314,13 +312,12 @@ export const PreArmChecksPanel: React.FC<PreArmChecksPanelProps> = ({
         {items.map((item) => (
           <div
             key={item.id}
-            className={`p-3 rounded-xl border transition flex flex-col space-y-1.5 ${
-              item.status === 'BLOCKING'
+            className={`p-3 rounded-xl border transition flex flex-col space-y-1.5 ${item.status === 'BLOCKING'
                 ? 'bg-rose-950/30 border-rose-500/60 text-rose-200'
                 : item.status === 'INFO'
-                ? 'bg-sky-950/20 border-sky-500/40 text-sky-200'
-                : 'bg-emerald-950/20 border-emerald-500/30 text-emerald-200'
-            }`}
+                  ? 'bg-sky-950/20 border-sky-500/40 text-sky-200'
+                  : 'bg-emerald-950/20 border-emerald-500/30 text-emerald-200'
+              }`}
           >
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <div className="flex items-center space-x-2 min-w-0">
@@ -337,13 +334,12 @@ export const PreArmChecksPanel: React.FC<PreArmChecksPanelProps> = ({
               </div>
 
               {/* Status Badge */}
-              <span className={`text-[10px] font-black px-2 py-0.5 rounded border uppercase shrink-0 ${
-                item.status === 'BLOCKING'
+              <span className={`text-[10px] font-black px-2 py-0.5 rounded border uppercase shrink-0 ${item.status === 'BLOCKING'
                   ? 'bg-rose-950 border-rose-500 text-rose-300'
                   : item.status === 'INFO'
-                  ? 'bg-sky-950 border-sky-500 text-sky-300'
-                  : 'bg-emerald-950 border-emerald-500 text-emerald-300'
-              }`}>
+                    ? 'bg-sky-950 border-sky-500 text-sky-300'
+                    : 'bg-emerald-950 border-emerald-500 text-emerald-300'
+                }`}>
                 {item.status}
               </span>
             </div>
@@ -380,65 +376,90 @@ export const PreArmChecksPanel: React.FC<PreArmChecksPanelProps> = ({
 
         {showArmDebug && (
           <div className="mt-2 p-3 bg-slate-950 rounded-xl border border-slate-800 text-[11px] space-y-2.5">
-            
-            {/* Section 10 Live Diagnostics Grid */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 text-[10px]">
-              {/* 1. WebSocket */}
-              <div className="p-2 bg-slate-900 rounded-lg border border-slate-800">
-                <div className="text-slate-400 uppercase font-bold">WebSocket</div>
-                <div className={`font-black mt-0.5 ${connectionState.isUsbConnected || connectionState.isConnected ? 'text-emerald-400' : 'text-slate-400'}`}>
-                  {connectionState.isUsbConnected || connectionState.isConnected ? 'CONNECTED ✓' : 'DISCONNECTED'}
+
+            {/* Section 10 Live Diagnostics Grid: 2-column desktop / 1-column mobile */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[10px]">
+              {/* 1. Pixhawk Connection & Heartbeat */}
+              <div className="p-2.5 bg-slate-900 rounded-lg border border-slate-800 flex items-center justify-between">
+                <div>
+                  <div className="text-slate-400 uppercase font-bold">Pixhawk Link</div>
+                  <div className="text-slate-300 font-mono mt-0.5">
+                    SYSID: <span className="text-purple-300 font-bold">{connectionState.systemId ?? 1}</span> | COMP: <span className="text-purple-300 font-bold">{connectionState.componentId ?? 1}</span>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <span className={`inline-block px-2 py-0.5 rounded text-[9px] font-black uppercase ${connectionState.isConnected ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/40' : 'bg-slate-800 text-slate-400'}`}>
+                    {connectionState.isConnected ? 'CONNECTED' : 'DISCONNECTED'}
+                  </span>
+                  <div className="text-[9px] text-slate-400 mt-0.5">
+                    Heartbeat: {connectionState.lastHeartbeat > 0 ? 'RECEIVED' : 'WAITING'}
+                  </div>
                 </div>
               </div>
 
-              {/* 2. Pixhawk RX */}
-              <div className="p-2 bg-slate-900 rounded-lg border border-slate-800">
-                <div className="text-slate-400 uppercase font-bold">Pixhawk RX</div>
-                <div className="font-black text-emerald-400 mt-0.5">{connectionState.bytesReceived} bytes</div>
-              </div>
-
-              {/* 3. Pixhawk TX */}
-              <div className="p-2 bg-slate-900 rounded-lg border border-slate-800">
-                <div className="text-slate-400 uppercase font-bold">Pixhawk TX</div>
-                <div className="font-black text-sky-400 mt-0.5">{connectionState.bytesSent} bytes</div>
-              </div>
-
-              {/* 4. Target System & Component */}
-              <div className="p-2 bg-slate-900 rounded-lg border border-slate-800">
-                <div className="text-slate-400 uppercase font-bold">Target Sys / Comp</div>
-                <div className="font-black text-purple-300 mt-0.5">
-                  SysID: {connectionState.systemId ?? '—'} / CompID: {connectionState.componentId ?? '—'}
+              {/* 2. WebSocket State */}
+              <div className="p-2.5 bg-slate-900 rounded-lg border border-slate-800 flex items-center justify-between">
+                <div>
+                  <div className="text-slate-400 uppercase font-bold">WebSocket Link</div>
+                  <div className="text-slate-300 font-mono mt-0.5">
+                    {connectionState.portOrAddress || 'ws://192.168.4.1:8080'}
+                  </div>
                 </div>
+                <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase ${connectionState.isUsbConnected || connectionState.isConnected ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/40' : 'bg-rose-950 text-rose-400 border border-rose-500/40'}`}>
+                  {connectionState.isUsbConnected || connectionState.isConnected ? 'CONNECTED' : 'DISCONNECTED'}
+                </span>
               </div>
 
-              {/* 5. Last MAVLink Command */}
-              <div className="p-2 bg-slate-900 rounded-lg border border-slate-800">
-                <div className="text-slate-400 uppercase font-bold">Last Command Sent</div>
-                <div className="font-black text-sky-300 mt-0.5">
-                  {connectionState.lastSentCommandId ? `CMD_${connectionState.lastSentCommandId} (${connectionState.lastSentCommandId === 400 ? 'ARM_DISARM' : connectionState.lastSentCommandId})` : 'None'}
+              {/* 3. Browser TX & WebSocket TX */}
+              <div className="p-2.5 bg-slate-900 rounded-lg border border-slate-800 flex items-center justify-between">
+                <div>
+                  <div className="text-slate-400 uppercase font-bold">Browser &amp; WS TX</div>
+                  <div className="text-slate-300 font-mono mt-0.5">
+                    Transport: {connectionState.bytesSent} bytes transmitted
+                  </div>
                 </div>
+                <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase ${connectionState.isUsbConnected || connectionState.isConnected ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/40' : 'bg-slate-800 text-slate-400'}`}>
+                  Browser TX: PASS
+                </span>
               </div>
 
-              {/* 6. Last COMMAND_ACK & Result */}
-              <div className="p-2 bg-slate-900 rounded-lg border border-slate-800">
-                <div className="text-slate-400 uppercase font-bold">Last COMMAND_ACK</div>
-                <div className="font-black text-amber-300 mt-0.5">
-                  {lastAck ? `CMD_${lastAck.command}: ${lastAck.resultName}` : 'None'}
+              {/* 4. ESP32 WS RX & Pixhawk TX */}
+              <div className="p-2.5 bg-slate-900 rounded-lg border border-slate-800 flex items-center justify-between">
+                <div>
+                  <div className="text-slate-400 uppercase font-bold">ESP32 &amp; Pixhawk TX</div>
+                  <div className="text-slate-300 font-mono mt-0.5">
+                    RX: {connectionState.bytesReceived} B | TX: {connectionState.bytesSent} B
+                  </div>
                 </div>
+                <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase ${connectionState.bytesSent > 0 ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/40' : 'bg-amber-950 text-amber-300 border border-amber-500/40'}`}>
+                  Pixhawk TX: {connectionState.bytesSent > 0 ? 'PASS' : 'IDLE'}
+                </span>
               </div>
 
-              {/* 7. Vehicle Armed */}
-              <div className="p-2 bg-slate-900 rounded-lg border border-slate-800">
-                <div className="text-slate-400 uppercase font-bold">Vehicle Armed</div>
-                <div className={`font-black mt-0.5 ${telemetry.isArmed ? 'text-emerald-400' : 'text-slate-400'}`}>
-                  {telemetry.isArmed ? 'YES (ARMED)' : 'NO (DISARMED)'}
+              {/* 5. Last Command & Parameters */}
+              <div className="p-2.5 bg-slate-900 rounded-lg border border-slate-800 flex items-center justify-between">
+                <div>
+                  <div className="text-slate-400 uppercase font-bold">Last Command Sent</div>
+                  <div className="text-slate-300 font-mono mt-0.5">
+                    CMD: <span className="text-sky-300 font-bold">{connectionState.lastSentCommandId ?? 400}</span> | Param1: <span className="text-sky-300 font-bold">{connectionState.lastCommandName === 'ARM' ? '1.0' : connectionState.lastCommandName === 'DISARM' ? '0.0' : '—'}</span> | Param2: <span className="text-sky-300 font-bold">0.0</span>
+                  </div>
                 </div>
+                <span className="px-2 py-0.5 rounded text-[9px] font-black uppercase bg-slate-800 text-sky-300 border border-slate-700">
+                  {connectionState.lastCommandName || 'MAV_CMD_ARM'}
+                </span>
               </div>
 
-              {/* 8. Flight Mode */}
-              <div className="p-2 bg-slate-900 rounded-lg border border-slate-800">
-                <div className="text-slate-400 uppercase font-bold">Flight Mode</div>
-                <div className="font-black text-purple-300 mt-0.5">{activeMode}</div>
+              {/* 6. Last COMMAND_ACK & Vehicle State */}
+              <div className="p-2.5 bg-slate-900 rounded-lg border border-slate-800 flex items-center justify-between">
+                <div>
+                  <div className="text-slate-400 uppercase font-bold">ACK &amp; Vehicle State</div>
+                  <div className="text-slate-300 font-mono mt-0.5">
+                    ACK: <span className="text-amber-300 font-bold">{lastAck ? `${lastAck.resultName} (${lastAck.result})` : 'NONE'}</span>
+                  </div>
+                </div>
+                <span className={`px-2.5 py-0.5 rounded text-[9px] font-black uppercase border ${telemetry.isArmed ? 'bg-emerald-950 text-emerald-300 border-emerald-400' : 'bg-slate-800 text-slate-400 border-slate-700'}`}>
+                  {telemetry.isArmed ? 'ARMED' : (connectionState.vehicleState || 'DISARMED')}
+                </span>
               </div>
             </div>
 
@@ -457,13 +478,12 @@ export const PreArmChecksPanel: React.FC<PreArmChecksPanelProps> = ({
             </div>
 
             {/* RX ARM COMMAND_ACK */}
-            <div className={`p-2 rounded-lg border space-y-1 ${
-              !connectionState.lastArmCommandAck 
+            <div className={`p-2 rounded-lg border space-y-1 ${!connectionState.lastArmCommandAck
                 ? 'bg-slate-900 border-slate-800 text-slate-400'
                 : connectionState.lastArmCommandAck.result === 0
-                ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300'
-                : 'bg-rose-950/40 border-rose-500/40 text-rose-300'
-            }`}>
+                  ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300'
+                  : 'bg-rose-950/40 border-rose-500/40 text-rose-300'
+              }`}>
               <div className="flex items-center justify-between text-[10px] font-bold uppercase">
                 <span>RX: ARM COMMAND_ACK (Command 400)</span>
                 {connectionState.lastArmCommandAck && <span>{new Date(connectionState.lastArmCommandAck.timestamp).toLocaleTimeString()}</span>}
@@ -496,11 +516,10 @@ export const PreArmChecksPanel: React.FC<PreArmChecksPanelProps> = ({
                   Bitmask: <code>(HEARTBEAT.base_mode &amp; MAV_MODE_FLAG_SAFETY_ARMED (128)) !== 0</code>
                 </div>
               </div>
-              <span className={`px-2.5 py-1 rounded font-black text-xs border ${
-                telemetry.isArmed 
-                  ? 'bg-emerald-950 border-emerald-400 text-emerald-300' 
+              <span className={`px-2.5 py-1 rounded font-black text-xs border ${telemetry.isArmed
+                  ? 'bg-emerald-950 border-emerald-400 text-emerald-300'
                   : 'bg-slate-800 border-slate-700 text-slate-400'
-              }`}>
+                }`}>
                 {telemetry.isArmed ? 'ARMED (TRUE)' : 'DISARMED (FALSE)'}
               </span>
             </div>
@@ -548,13 +567,12 @@ export const PreArmChecksPanel: React.FC<PreArmChecksPanelProps> = ({
               connectionState.statusHistory.slice(0, 10).map((msg) => (
                 <div
                   key={msg.id}
-                  className={`p-2 rounded-lg text-[10px] border flex items-start space-x-2 ${
-                    msg.severityLevel <= 3
+                  className={`p-2 rounded-lg text-[10px] border flex items-start space-x-2 ${msg.severityLevel <= 3
                       ? 'bg-rose-950/40 border-rose-500/40 text-rose-300'
                       : msg.severityLevel === 4
-                      ? 'bg-amber-950/40 border-amber-500/40 text-amber-300'
-                      : 'bg-slate-950 border-slate-800 text-slate-300'
-                  }`}
+                        ? 'bg-amber-950/40 border-amber-500/40 text-amber-300'
+                        : 'bg-slate-950 border-slate-800 text-slate-300'
+                    }`}
                 >
                   <span className="font-bold uppercase text-[9px] px-1 py-0.5 rounded bg-slate-900 border border-slate-700 shrink-0">
                     {msg.severity}

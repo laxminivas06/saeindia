@@ -1240,24 +1240,27 @@ class MAVLinkService {
     const packet = this.buildMavlink1Frame(76 /* COMMAND_LONG */, payload);
     const hexDump = Array.from(packet).map(b => b.toString(16).toUpperCase().padStart(2, '0')).join(' ');
 
+    const prefix = command === 400 ? (param1 === 1.0 ? '[ARM]' : '[DISARM]') : `[CMD_${command}]`;
+
     if (command === 400) {
-      console.log(`[MAVLINK TX COMMAND]\ncommand: 400\nparam1: ${param1}\nparam2: ${param2}\ntarget_system: ${targetSys}\ntarget_component: ${targetComp}`);
-      console.log(`[ARM] packetLength=${packet.length}`);
-      console.log('[ARM] MAVLink packet generated');
-      console.log(`[ARM] MAVLink TX:\n${hexDump}`);
-      console.log('[ARM] Sending binary packet...');
+      console.log(`${prefix} PACKET LENGTH = ${packet.length}`);
+      console.log(`${prefix} PACKET HEX = ${hexDump}`);
+      console.log(`${prefix} WS SEND START`);
     }
 
     this.logDiagnostic('MAVLINK', `[COMMAND_LONG TX] Sending cmd ${command} (p1=${param1}, p2=${param2}) to SysID ${targetSys} CompID ${targetComp} (${packet.length} bytes)`, 'info');
 
     const success = await usbHostService.sendBytes(packet);
     if (success) {
+      if (command === 400) {
+        console.log(`${prefix} WS SEND COMPLETE`);
+      }
       this.connectionState.bytesSent += packet.length;
-      this.logDiagnostic('MAVLINK', `[ARM TX] Successfully forwarded ${packet.length} bytes to transport bridge (Total TX: ${this.connectionState.bytesSent} B)`, 'success');
+      this.logDiagnostic('MAVLINK', `[COMMAND_LONG TX] Successfully forwarded ${packet.length} bytes to transport bridge (Total TX: ${this.connectionState.bytesSent} B)`, 'success');
       this.notifyConnection();
     } else {
-      console.error(`[ARM TX] Failed to send binary packet through transport bridge (${packet.length} bytes)`);
-      this.logDiagnostic('ERROR', `[ARM TX] Failed to send ${packet.length} bytes to transport`, 'error');
+      console.error(`${prefix} Failed to send binary packet through transport bridge (${packet.length} bytes)`);
+      this.logDiagnostic('ERROR', `${prefix} Failed to send ${packet.length} bytes to transport`, 'error');
     }
     return success;
   }
