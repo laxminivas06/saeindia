@@ -8,7 +8,10 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "cap:sync": "cap sync",
-    "cap:android": "cap open android"
+    "cap:android": "cap open android",
+    "relay:start": "node relay-server/server.js",
+    "connector:start": "node local-connector/connector.js",
+    "test:e2e": "node test-e2e.cjs"
   },
   "dependencies": {
     "@capacitor/android": "^6.1.2",

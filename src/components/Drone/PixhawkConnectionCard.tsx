@@ -75,8 +75,11 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
     return 'ESP32'; // Default to ESP32 wireless bridge
   });
 
+  const isHttpsOrigin = typeof window !== 'undefined' && window.location.protocol === 'https:';
+
   // ESP32 WebSocket Connection Protocol: 'AUTO' | 'WS' | 'WSS'
   const [protocolMode, setProtocolMode] = useState<'AUTO' | 'WS' | 'WSS'>(() => {
+    if (isHttpsOrigin) return 'WSS';
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('esp32_proto_mode') as 'AUTO' | 'WS' | 'WSS';
       if (saved === 'AUTO' || saved === 'WS' || saved === 'WSS') return saved;
@@ -112,16 +115,25 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
   // Secure Endpoint / Relay URL settings (WSS Mode)
   const [esp32SecureEndpoint, setEsp32SecureEndpoint] = useState<string>(() => {
     if (typeof window !== 'undefined') {
-      return localStorage.getItem('esp32_secure_endpoint') || 'relay.drone-gcs.com:8443';
+      const saved = localStorage.getItem('esp32_secure_endpoint');
+      if (saved && saved.trim().length > 0) return saved.trim();
     }
-    return 'relay.drone-gcs.com:8443';
+    return (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SECURE_RELAY_URL) || '';
+  });
+
+  // Secure Relay Token
+  const [esp32RelayToken, setEsp32RelayToken] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('esp32_relay_token');
+      if (saved && saved.trim().length > 0) return saved.trim();
+    }
+    return (typeof import.meta !== 'undefined' && import.meta.env?.VITE_RELAY_TOKEN) || 'saeindia_secret_token_2026';
   });
 
   // Mobile collapsed toggle
   const [isMobileCollapsed, setIsMobileCollapsed] = useState(false);
 
   const pageProtocol = typeof window !== 'undefined' ? window.location.protocol.replace(':', '').toUpperCase() : 'HTTP';
-  const isHttpsOrigin = typeof window !== 'undefined' && window.location.protocol === 'https:';
 
   const phase: ConnectionPhase = connectionState.phase;
   const isConnected = connectionState.isConnected; // MAVLink verified
@@ -133,10 +145,11 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
   // Active Wi-Fi state (Wi-Fi remains connected on ESP32 regardless of browser page reload/WebSocket state)
   const isWifiConfigured = Boolean(wifiSsid && wifiSsid.trim().length > 0);
 
-  // Resolved endpoint URL to display clearly
+  // Resolved connection mode and target URL
+  const esp32Mode: 'LOCAL' | 'SECURE' = isHttpsOrigin || protocolMode === 'WSS' ? 'SECURE' : 'LOCAL';
   const cleanPath = esp32Path ? (esp32Path.startsWith('/') ? esp32Path : `/${esp32Path}`) : '';
-  const effectiveProto = protocolMode === 'WS' ? 'ws' : protocolMode === 'WSS' ? 'wss' : (isHttpsOrigin ? 'wss' : 'ws');
-  const targetHost = (protocolMode === 'WSS' && esp32SecureEndpoint) ? esp32SecureEndpoint.replace(/^wss?:\/\//i, '') : `${esp32Host}:${esp32Port}`;
+  const effectiveProto = esp32Mode === 'SECURE' ? 'wss' : 'ws';
+  const targetHost = (esp32Mode === 'SECURE' && esp32SecureEndpoint) ? esp32SecureEndpoint.replace(/^wss?:\/\//i, '') : `${esp32Host}:${esp32Port}`;
   const resolvedTargetUrl = `${effectiveProto}://${targetHost}${cleanPath}`;
 
   // Five Clear Connection States
@@ -219,7 +232,6 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
   };
 
   // Backward compatibility alias for legacy view sections
-  const esp32Mode: 'LOCAL' | 'SECURE' = protocolMode === 'WSS' ? 'SECURE' : 'LOCAL';
   const setEsp32Mode = (mode: 'LOCAL' | 'SECURE') => setProtocolMode(mode === 'SECURE' ? 'WSS' : 'WS');
 
   const handleConnectEsp32 = async () => {
@@ -232,6 +244,7 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
         localStorage.setItem('esp32_port', esp32Port.toString());
         localStorage.setItem('esp32_path', esp32Path.trim());
         localStorage.setItem('esp32_secure_endpoint', esp32SecureEndpoint.trim());
+        localStorage.setItem('esp32_relay_token', esp32RelayToken.trim());
         localStorage.setItem('esp32_proto', effectiveProto);
         localStorage.setItem('esp32_baud', selectedBaud.toString());
         localStorage.setItem('esp32_wifi_ssid', wifiSsid.trim());
@@ -244,6 +257,7 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
         port: esp32Port,
         path: esp32Path.trim(),
         secureEndpoint: esp32SecureEndpoint.trim(),
+        relayToken: esp32RelayToken.trim(),
         protocol: effectiveProto,
         baudRate: selectedBaud,
         wifiSsid: wifiSsid.trim()
@@ -497,61 +511,69 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                   PROTOCOL:
                 </span>
                 
-                {/* Protocol Selector: [ Auto ] [ WS ] [ WSS ] */}
-                <div className="flex items-center space-x-1 bg-slate-950 p-1 rounded-xl border border-purple-500/40">
-                  <button
-                    onClick={() => {
-                      setProtocolMode('AUTO');
-                      if (typeof window !== 'undefined') localStorage.setItem('esp32_proto_mode', 'AUTO');
-                    }}
-                    className={`px-3 py-1 rounded-lg text-xs font-black transition cursor-pointer flex items-center space-x-1 ${
-                      protocolMode === 'AUTO'
-                        ? 'bg-purple-600 text-white shadow-md shadow-purple-600/30'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                    title="Auto: HTTP → WS, HTTPS → WSS (with WS fallback)"
-                  >
-                    <Zap className="w-3 h-3 text-purple-300" />
-                    <span>Auto</span>
-                  </button>
+                {/* Protocol Selector: [ Auto ] [ WS ] [ WSS ] or Secure Mode badge on HTTPS */}
+                {isHttpsOrigin ? (
+                  <div className="flex items-center space-x-1.5 bg-emerald-950/80 px-3 py-1 rounded-xl border border-emerald-500/40 text-emerald-300 text-xs font-black">
+                    <Lock className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>SECURE MODE (WSS Relay)</span>
+                    <span className="text-[10px] text-emerald-400/80 font-normal ml-1">(HTTPS Origin)</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center space-x-1 bg-slate-950 p-1 rounded-xl border border-purple-500/40">
+                    <button
+                      onClick={() => {
+                        setProtocolMode('AUTO');
+                        if (typeof window !== 'undefined') localStorage.setItem('esp32_proto_mode', 'AUTO');
+                      }}
+                      className={`px-3 py-1 rounded-lg text-xs font-black transition cursor-pointer flex items-center space-x-1 ${
+                        protocolMode === 'AUTO'
+                          ? 'bg-purple-600 text-white shadow-md shadow-purple-600/30'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                      title="Auto: HTTP → WS, HTTPS → WSS"
+                    >
+                      <Zap className="w-3 h-3 text-purple-300" />
+                      <span>Auto</span>
+                    </button>
 
-                  <button
-                    onClick={() => {
-                      setProtocolMode('WS');
-                      if (typeof window !== 'undefined') {
-                        localStorage.setItem('esp32_proto_mode', 'WS');
-                        localStorage.setItem('esp32_conn_mode', 'LOCAL');
-                      }
-                    }}
-                    className={`px-3 py-1 rounded-lg text-xs font-black transition cursor-pointer flex items-center space-x-1 ${
-                      protocolMode === 'WS'
-                        ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                    title="Direct local non-TLS WebSocket (ws://) for ESP32"
-                  >
-                    <span>WS (ws://)</span>
-                  </button>
+                    <button
+                      onClick={() => {
+                        setProtocolMode('WS');
+                        if (typeof window !== 'undefined') {
+                          localStorage.setItem('esp32_proto_mode', 'WS');
+                          localStorage.setItem('esp32_conn_mode', 'LOCAL');
+                        }
+                      }}
+                      className={`px-3 py-1 rounded-lg text-xs font-black transition cursor-pointer flex items-center space-x-1 ${
+                        protocolMode === 'WS'
+                          ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                      title="Direct local non-TLS WebSocket (ws://) for ESP32"
+                    >
+                      <span>WS (ws://)</span>
+                    </button>
 
-                  <button
-                    onClick={() => {
-                      setProtocolMode('WSS');
-                      if (typeof window !== 'undefined') {
-                        localStorage.setItem('esp32_proto_mode', 'WSS');
-                        localStorage.setItem('esp32_conn_mode', 'SECURE');
-                      }
-                    }}
-                    className={`px-3 py-1 rounded-lg text-xs font-black transition cursor-pointer flex items-center space-x-1 ${
-                      protocolMode === 'WSS'
-                        ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                    title="Secure TLS WebSocket (wss://) for production server / relay"
-                  >
-                    <Lock className="w-3 h-3 text-emerald-200" />
-                    <span>WSS (wss://)</span>
-                  </button>
-                </div>
+                    <button
+                      onClick={() => {
+                        setProtocolMode('WSS');
+                        if (typeof window !== 'undefined') {
+                          localStorage.setItem('esp32_proto_mode', 'WSS');
+                          localStorage.setItem('esp32_conn_mode', 'SECURE');
+                        }
+                      }}
+                      className={`px-3 py-1 rounded-lg text-xs font-black transition cursor-pointer flex items-center space-x-1 ${
+                        protocolMode === 'WSS'
+                          ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                      title="Secure TLS WebSocket (wss://) for production server / relay"
+                    >
+                      <Lock className="w-3 h-3 text-emerald-200" />
+                      <span>WSS (wss://)</span>
+                    </button>
+                  </div>
+                )}
 
                 {protocolMode === 'AUTO' && (
                   <span className="text-[10px] text-slate-400 font-mono hidden md:inline">
@@ -703,25 +725,40 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
               </div>
             </div>
 
-            {/* Optional Secure Relay input when WSS is selected */}
-            {protocolMode === 'WSS' && (
-              <div className="flex items-center space-x-2 bg-slate-950/80 p-2 rounded-lg border border-emerald-500/30 text-xs">
-                <span className="text-emerald-400 font-bold shrink-0 flex items-center space-x-1">
-                  <Lock className="w-3 h-3" />
-                  <span>Secure Relay / Proxy Endpoint:</span>
-                </span>
-                <input
-                  type="text"
-                  value={esp32SecureEndpoint}
-                  onChange={(e) => setEsp32SecureEndpoint(e.target.value)}
-                  placeholder="relay.drone-gcs.com:8443"
-                  className="bg-slate-900 px-2 py-1 rounded text-slate-100 font-mono text-xs w-full border border-slate-700 focus:outline-none"
-                  title="Reverse proxy or relay endpoint for WSS"
-                />
+            {/* Secure Relay URL and Token inputs when SECURE / WSS is active */}
+            {esp32Mode === 'SECURE' && (
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 bg-slate-950/80 p-2.5 rounded-lg border border-emerald-500/30 text-xs">
+                <div className="sm:col-span-8 flex items-center space-x-1.5">
+                  <span className="text-emerald-400 font-bold shrink-0 flex items-center space-x-1">
+                    <Lock className="w-3 h-3" />
+                    <span>Secure Relay URL:</span>
+                  </span>
+                  <input
+                    type="text"
+                    value={esp32SecureEndpoint}
+                    onChange={(e) => setEsp32SecureEndpoint(e.target.value)}
+                    placeholder="wss://your-relay-domain.onrender.com/ws"
+                    className="bg-slate-900 px-2 py-1 rounded text-slate-100 font-mono text-xs w-full border border-slate-700 focus:outline-none focus:border-emerald-500"
+                    title="Cloud WSS Relay URL (e.g. wss://sae-relay.onrender.com/ws)"
+                  />
+                </div>
+                <div className="sm:col-span-4 flex items-center space-x-1.5">
+                  <span className="text-slate-400 font-bold shrink-0 text-[10px] uppercase">
+                    Token:
+                  </span>
+                  <input
+                    type="password"
+                    value={esp32RelayToken}
+                    onChange={(e) => setEsp32RelayToken(e.target.value)}
+                    placeholder="RELAY_TOKEN"
+                    className="bg-slate-900 px-2 py-1 rounded text-slate-100 font-mono text-xs w-full border border-slate-700 focus:outline-none focus:border-emerald-500"
+                    title="Shared Secret Token for Secure Relay"
+                  />
+                </div>
               </div>
             )}
 
-            {/* 5 Clear States Real-Time Status Card */}
+            {/* Real-Time Status Card */}
             <div className={`p-3 rounded-xl border transition ${
               linkState === 'CONNECTED'
                 ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-200'
@@ -747,16 +784,22 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                       : 'bg-slate-500'
                   }`} />
                   <span className="font-mono font-black text-sm uppercase">
-                    ● ESP32 {linkState === 'CONNECTED' ? 'Connected' : linkState === 'CONNECTING' ? 'Connecting...' : linkState === 'RECONNECTING' ? 'Reconnecting...' : linkState === 'ERROR' ? 'Connection Error' : 'Disconnected'}
+                    ● {esp32Mode === 'SECURE' ? 'SECURE MODE — WSS Relay' : 'LOCAL MODE — ESP32 Direct WS'} : {linkState === 'CONNECTED' ? 'CONNECTED' : linkState === 'CONNECTING' ? 'CONNECTING...' : linkState === 'RECONNECTING' ? 'RECONNECTING...' : 'DISCONNECTED'}
                   </span>
                 </div>
 
                 {/* State metrics */}
                 <div className="flex flex-wrap items-center gap-3 text-xs font-mono">
                   <div>
-                    <span className="text-slate-400">WS: </span>
+                    <span className="text-slate-400">Mode: </span>
+                    <span className={`font-bold ${esp32Mode === 'SECURE' ? 'text-emerald-300' : 'text-sky-300'}`}>
+                      {esp32Mode === 'SECURE' ? 'SECURE (WSS)' : 'LOCAL (WS)'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400">WS Link: </span>
                     <span className="font-bold text-white">
-                      {isWebSocketOpen ? 'Connected' : linkState === 'CONNECTING' ? 'Connecting' : linkState === 'RECONNECTING' ? 'Reconnecting' : 'Disconnected'}
+                      {isWebSocketOpen ? 'OPEN' : isConnecting ? 'CONNECTING' : 'CLOSED'}
                     </span>
                   </div>
                   <div>
@@ -773,35 +816,163 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                       <span className="font-bold text-cyan-300">{latencyMs} ms</span>
                     </div>
                   )}
-                  <div>
-                    <span className="text-slate-400">Endpoint: </span>
-                    <span className="text-slate-300 underline">{resolvedTargetUrl}</span>
-                  </div>
                 </div>
               </div>
 
-              {/* Informative fallback message if WSS is unavailable */}
-              {connectionState.esp32ErrorCategory === 'WSS_TLS_FAILURE' && (
-                <div className="mt-2 pt-2 border-t border-rose-500/30 text-xs text-amber-300 flex items-start space-x-1.5">
-                  <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              {/* Informative Failure Category Banners (Requirement 11) */}
+              {(connectionState.esp32ErrorCategory === 'RELAY_UNAVAILABLE' || connectionState.esp32ErrorMessage?.includes('Secure relay unavailable')) && (
+                <div className="mt-2.5 pt-2 border-t border-rose-500/30 text-xs text-rose-300 flex items-start space-x-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
                   <div>
-                    <strong className="text-amber-200">⚠ Secure WebSocket unavailable:</strong>
-                    <div>The ESP32 endpoint does not appear to support WSS. Using WS for local ESP32 communication.</div>
+                    <strong className="text-rose-200">Secure relay unavailable.</strong>
+                    <div className="text-[11px] text-slate-300 mt-0.5">
+                      Could not establish connection to the Secure WSS Relay. Check that your cloud relay server is running and <code>VITE_SECURE_RELAY_URL</code> is set.
+                    </div>
                   </div>
                 </div>
               )}
 
-              {/* Insecure mixed-content blocking banner */}
+              {connectionState.esp32ErrorCategory === 'CONNECTOR_OFFLINE' && (
+                <div className="mt-2.5 pt-2 border-t border-amber-500/30 text-xs text-amber-300 flex items-start space-x-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="text-amber-200">ESP32 connector offline.</strong>
+                    <div className="text-[11px] text-slate-300 mt-0.5">
+                      Cloud relay is online, but the local connector agent is not connected. Run <code>npm run connector:start</code> on the machine connected to the ESP32 Wi-Fi.
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {connectionState.esp32ErrorCategory === 'ESP32_UNAVAILABLE' && (
+                <div className="mt-2.5 pt-2 border-t border-amber-500/30 text-xs text-amber-300 flex items-start space-x-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="text-amber-200">ESP32 unavailable.</strong>
+                    <div className="text-[11px] text-slate-300 mt-0.5">
+                      The local connector cannot reach the ESP32 at {esp32Host}:{esp32Port}. Verify ESP32 power and Wi-Fi connection.
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {connectionState.esp32ErrorCategory === 'MIXED_CONTENT_BLOCK' && (
-                <div className="mt-2 pt-2 border-t border-rose-500/30 text-xs text-rose-200 flex items-start space-x-1.5">
+                <div className="mt-2.5 pt-2 border-t border-rose-500/30 text-xs text-rose-200 flex items-start space-x-2">
                   <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
                   <div>
-                    <strong className="text-rose-100">⚠ Mixed-Content Browser Blocking:</strong>
-                    <div>Modern browsers block insecure <code>ws://</code> from HTTPS pages (<code>{window.location.origin}</code>).</div>
-                    <div className="mt-1 text-slate-300">
-                      • For local testing without TLS, open Ground Station over <code>http://</code> (e.g. <code>http://{window.location.hostname}:5173</code>).
-                      <br />• For production HTTPS, use a WebSocket reverse proxy relay (<code>HTTPS → WSS → Proxy → WS → ESP32</code>).
+                    <strong className="text-rose-100">Browser Mixed Content Block:</strong>
+                    <div className="text-[11px] text-slate-300 mt-0.5">
+                      Browsers block insecure ws:// connections from HTTPS ({window.location.origin}). Please use SECURE mode with a WSS relay or open Ground Station on http://.
                     </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Connection Path Hop Visualizer (Requirement 8) */}
+            <div className="p-3 bg-slate-950/90 rounded-xl border border-slate-800 space-y-2">
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="font-black uppercase text-slate-300 flex items-center space-x-1.5">
+                  <Activity className="w-3.5 h-3.5 text-purple-400" />
+                  <span>CONNECTION PATH</span>
+                </span>
+                <span className="text-[10px] text-purple-300 font-mono">
+                  {esp32Mode === 'SECURE' ? 'SECURE MODE (WSS Relay)' : 'LOCAL MODE (Direct WS)'}
+                </span>
+              </div>
+
+              {esp32Mode === 'SECURE' ? (
+                /* Multi-hop path: Browser -> WSS Relay -> Local Connector -> ESP32 */
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 text-center text-[11px]">
+                  <div className="p-2 rounded-lg border bg-slate-900 border-slate-800 flex flex-col items-center">
+                    <span className="font-bold text-emerald-400 flex items-center space-x-1">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                      <span>Browser</span>
+                    </span>
+                    <span className="text-[9px] text-slate-400 mt-0.5">HTTPS Vercel</span>
+                  </div>
+
+                  <div className={`p-2 rounded-lg border flex flex-col items-center ${
+                    isWebSocketOpen
+                      ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-200'
+                      : 'bg-slate-900 border-slate-800 text-slate-400'
+                  }`}>
+                    <span className="font-bold flex items-center space-x-1">
+                      <span className={`w-2 h-2 rounded-full ${isWebSocketOpen ? 'bg-emerald-400' : 'bg-slate-600'}`}></span>
+                      <span>WSS Relay</span>
+                    </span>
+                    <span className="text-[9px] text-slate-400 mt-0.5 truncate max-w-[120px]" title={esp32SecureEndpoint || 'Cloud Relay'}>
+                      {isWebSocketOpen ? 'Connected ✓' : 'Cloud Relay'}
+                    </span>
+                  </div>
+
+                  <div className={`p-2 rounded-lg border flex flex-col items-center ${
+                    isWebSocketOpen && connectionState.esp32ConnectorOnline
+                      ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-200'
+                      : isWebSocketOpen && !connectionState.esp32ConnectorOnline
+                      ? 'bg-amber-950/40 border-amber-500/40 text-amber-200'
+                      : 'bg-slate-900 border-slate-800 text-slate-400'
+                  }`}>
+                    <span className="font-bold flex items-center space-x-1">
+                      <span className={`w-2 h-2 rounded-full ${
+                        isWebSocketOpen && connectionState.esp32ConnectorOnline
+                          ? 'bg-emerald-400'
+                          : isWebSocketOpen
+                          ? 'bg-amber-400 animate-pulse'
+                          : 'bg-slate-600'
+                      }`}></span>
+                      <span>Local Connector</span>
+                    </span>
+                    <span className="text-[9px] text-slate-400 mt-0.5">
+                      {isWebSocketOpen && connectionState.esp32ConnectorOnline ? 'Online ✓' : 'Local Agent'}
+                    </span>
+                  </div>
+
+                  <div className={`p-2 rounded-lg border flex flex-col items-center ${
+                    isWebSocketOpen && connectionState.esp32DeviceOnline
+                      ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-200'
+                      : isWebSocketOpen && !connectionState.esp32DeviceOnline
+                      ? 'bg-rose-950/30 border-rose-500/30 text-rose-300'
+                      : 'bg-slate-900 border-slate-800 text-slate-400'
+                  }`}>
+                    <span className="font-bold flex items-center space-x-1">
+                      <span className={`w-2 h-2 rounded-full ${
+                        isWebSocketOpen && connectionState.esp32DeviceOnline
+                          ? 'bg-emerald-400'
+                          : isWebSocketOpen
+                          ? 'bg-rose-400'
+                          : 'bg-slate-600'
+                      }`}></span>
+                      <span>ESP32</span>
+                    </span>
+                    <span className="text-[9px] text-slate-400 mt-0.5">
+                      {isWebSocketOpen && connectionState.esp32DeviceOnline ? 'Bridged ✓' : 'LAN 192.168.x.x'}
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                /* Direct local path */
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-center text-[11px]">
+                  <div className="p-2 rounded-lg border bg-slate-900 border-slate-800 flex flex-col items-center">
+                    <span className="font-bold text-sky-400 flex items-center space-x-1">
+                      <span className="w-2 h-2 rounded-full bg-sky-400"></span>
+                      <span>Browser</span>
+                    </span>
+                    <span className="text-[9px] text-slate-400 mt-0.5">Local Origin (http://)</span>
+                  </div>
+
+                  <div className={`p-2 rounded-lg border flex flex-col items-center ${
+                    isWebSocketOpen
+                      ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-200'
+                      : 'bg-slate-900 border-slate-800 text-slate-400'
+                  }`}>
+                    <span className="font-bold flex items-center space-x-1">
+                      <span className={`w-2 h-2 rounded-full ${isWebSocketOpen ? 'bg-emerald-400' : 'bg-slate-600'}`}></span>
+                      <span>ESP32 Direct WS</span>
+                    </span>
+                    <span className="text-[9px] text-slate-400 mt-0.5 font-mono">
+                      {esp32Host}:{esp32Port}{cleanPath}
+                    </span>
                   </div>
                 </div>
               )}
@@ -963,13 +1134,13 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
               <div className="p-3 bg-emerald-950/50 border border-emerald-500/50 rounded-xl text-emerald-200 text-xs space-y-1.5">
                 <div className="flex items-center space-x-1.5 font-bold text-emerald-300">
                   <Lock className="w-4 h-4 shrink-0" />
-                  <span>Production WSS Architecture (TLS Termination Required)</span>
+                  <span>Secure WSS Relay Architecture (Zero Port-Forwarding)</span>
                 </div>
                 <p className="text-[11px] text-emerald-200/90 leading-relaxed">
-                  Connecting to a secure WSS endpoint from an HTTPS web application requires a secure WebSocket relay or reverse-proxy with a valid SSL/TLS certificate.
+                  The browser connects securely via WSS to the cloud relay. The local connector agent running on your ESP32 Wi-Fi bridges packets outbound to the relay and forwards to the ESP32 via local WS.
                 </p>
                 <div className="text-[11px] font-mono text-emerald-300/90 bg-slate-950/80 p-2 rounded border border-emerald-500/30">
-                  HTTPS Web GCS ➔ Secure WSS Endpoint ➔ Cloud/Reverse-Proxy Relay ➔ ESP32 (LAN) ➔ Pixhawk
+                  HTTPS Web GCS (Vercel) ➔ Cloud Relay (WSS) ➔ Local Connector (Outbound WSS) ➔ ESP32 (LAN ws://) ➔ Pixhawk
                 </div>
               </div>
             ) : null}

@@ -179,6 +179,8 @@ export interface PixhawkConnectionState {
   esp32LatencyMs?: number;
   esp32ErrorCategory?: string;
   esp32ErrorMessage?: string;
+  esp32ConnectorOnline?: boolean;
+  esp32DeviceOnline?: boolean;
   diagnostics: UsbDeviceDiagnostics;
 }
 

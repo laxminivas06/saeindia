@@ -359,6 +359,8 @@ class MAVLinkService {
       this.connectionState.esp32LatencyMs = esp32Transport.getLatencyMs();
       this.connectionState.esp32ErrorCategory = esp32Transport.getErrorCategory();
       this.connectionState.esp32ErrorMessage = esp32Transport.getLastErrorMessage();
+      this.connectionState.esp32ConnectorOnline = esp32Transport.isConnectorOnline();
+      this.connectionState.esp32DeviceOnline = esp32Transport.isEsp32Online();
     }
 
     this.notifyConnection();
@@ -586,23 +588,13 @@ class MAVLinkService {
    * 1-Click ESP32-S3 Wireless Bridge Connection (WebSocket)
    * Supports AUTO (protocol negotiation), direct WS, and WSS connection modes.
    */
-  public async connectEsp32(options?: {
-    protocolMode?: 'AUTO' | 'WS' | 'WSS';
-    mode?: 'LOCAL' | 'SECURE';
-    host?: string;
-    port?: number;
-    path?: string;
-    secureEndpoint?: string;
-    protocol?: 'ws' | 'wss';
-    baudRate?: number;
-    wifiSsid?: string;
-  } | string, port: number = 8080, protocol: 'ws' | 'wss' = 'ws', baudRate: number = 57600): Promise<boolean> {
+  public async connectEsp32(options?: import('./transports/Esp32WebSocketTransport').Esp32WebSocketOptions | string, port: number = 8080, protocol: 'ws' | 'wss' = 'ws', baudRate: number = 57600): Promise<boolean> {
     if (this.simInterval) {
       clearInterval(this.simInterval);
       this.simInterval = null;
     }
 
-    let resolvedOptions: {
+    let resolvedOptions: import('./transports/Esp32WebSocketTransport').Esp32WebSocketOptions & {
       protocolMode: 'AUTO' | 'WS' | 'WSS';
       mode: 'LOCAL' | 'SECURE';
       host: string;
@@ -629,12 +621,14 @@ class MAVLinkService {
         wifiSsid: transportManager.getEsp32Transport().getWifiSsid()
       };
     } else {
+      const defaultRelayUrl = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SECURE_RELAY_URL) || '';
       const protocolMode = options?.protocolMode || (options?.mode === 'SECURE' ? 'WSS' : 'AUTO');
       const mode = options?.mode || (protocolMode === 'WSS' ? 'SECURE' : 'LOCAL');
       const host = (options?.host && options.host.trim().length > 0 ? options.host.trim() : '192.168.31.194');
       const p = options?.port || 8080;
       const path = options?.path !== undefined ? options.path.trim() : '/ws';
-      const secureEp = (options?.secureEndpoint || 'relay.drone-gcs.com:8443').trim();
+      const secureEp = (options?.secureEndpoint || defaultRelayUrl || transportManager.getEsp32Transport().getSecureEndpoint()).trim();
+      const relayToken = options?.relayToken || transportManager.getEsp32Transport().getRelayToken();
       const proto = options?.protocol || (protocolMode === 'WSS' ? 'wss' : 'ws');
       const baud = options?.baudRate || 57600;
       const ssid = options?.wifiSsid || transportManager.getEsp32Transport().getWifiSsid();
@@ -646,6 +640,7 @@ class MAVLinkService {
         port: p,
         path,
         secureEndpoint: secureEp,
+        relayToken,
         protocol: proto,
         baudRate: baud,
         wifiSsid: ssid
