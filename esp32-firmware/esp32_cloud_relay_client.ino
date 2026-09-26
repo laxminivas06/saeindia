@@ -157,6 +157,8 @@ void connectToWiFi() {
   Serial.println("---------------------------------------------------------");
   
   WiFi.mode(WIFI_STA);
+  // Configure Google Public DNS (8.8.8.8) to guarantee .onrender.com resolves on all mobile hotspots
+  WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, IPAddress(8, 8, 8, 8), IPAddress(1, 1, 1, 1));
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
   unsigned long startAttempt = millis();
@@ -187,6 +189,7 @@ void connectToWiFi() {
     Serial.printf("📍 [WIFI] IP Address:    %s\n", WiFi.localIP().toString().c_str());
     Serial.printf("📶 [WIFI] Signal (RSSI):  %d dBm\n", WiFi.RSSI());
     Serial.printf("🚪 [WIFI] Gateway:        %s\n", WiFi.gatewayIP().toString().c_str());
+    Serial.printf("🔍 [WIFI] DNS Server:    %s\n", WiFi.dnsIP().toString().c_str());
     Serial.println("---------------------------------------------------------");
   } else {
     Serial.println("❌ [WIFI FAILED] Could not connect to Wi-Fi. Check SSID and password.");
@@ -202,6 +205,15 @@ void connectToCloudRelay() {
 
   if (millis() - lastReconnectAttempt < RECONNECT_INTERVAL_MS) return;
   lastReconnectAttempt = millis();
+
+  // 1. Verify DNS resolution
+  IPAddress relayIP;
+  if (!WiFi.hostByName(RELAY_HOST, relayIP)) {
+    Serial.printf("❌ [DNS FAILED] Could not resolve '%s' via DNS %s. Check Internet connection!\n",
+                  RELAY_HOST, WiFi.dnsIP().toString().c_str());
+    return;
+  }
+  Serial.printf("🌐 [DNS OK] %s -> %s\n", RELAY_HOST, relayIP.toString().c_str());
 
   Serial.println("☁️  [WSS] Connecting to Render Cloud Relay via SSL...");
   Serial.printf("🔗 [WSS] URL: %s\n", RELAY_WSS_URL);
@@ -291,33 +303,21 @@ void loop() {
     if (bytesRead > 0) {
       totalRxBytesFromPixhawk += bytesRead;
 
-      // Identify MAVLink Packet Magic Byte (0xFD = MAVLink v2, 0xFE = MAVLink v1)
-      bool isMavlink = (uartBuffer[0] == 0xFD || uartBuffer[0] == 0xFE);
-      const char* proto = (uartBuffer[0] == 0xFD) ? "MAVLink2" : ((uartBuffer[0] == 0xFE) ? "MAVLink1" : "Raw Data");
-
       // Forward to Cloud Relay if connected
       if (wsClient.available()) {
         wsClient.sendBinary((const char*)uartBuffer, bytesRead);
         totalMavlinkPacketsSent++;
       }
-
-      // Live print to Serial Monitor
-      Serial.printf("📤 [PIXHAWK -> CLOUD] %u bytes [%s] -> %s (Total: %lu bytes | Pkts: %lu)\n",
-                    bytesRead,
-                    proto,
-                    wsClient.available() ? "STREAMING TO PHONE ✓" : "BUFFERED (WSS offline) ✗",
-                    totalRxBytesFromPixhawk,
-                    totalMavlinkPacketsSent);
     }
   }
 
-  // 6. Periodic 3-Second Live Status Heartbeat (Guarantees Serial Monitor is never silent)
+  // 6. Periodic 3-Second Live Status Heartbeat (Guarantees Serial Monitor is clean and CPU is not blocked)
   if (millis() - lastDiagnosticPrint > DIAGNOSTIC_INTERVAL_MS) {
     lastDiagnosticPrint = millis();
 
-    Serial.printf("📊 [MONITOR] Wi-Fi: %s | Cloud WSS: %s | Pixhawk RX: %lu bytes (%lu pkts) | Phone TX: %lu bytes\n",
+    Serial.printf("📊 [MONITOR] Wi-Fi: %s | Cloud WSS: %s | Pixhawk RX: %lu bytes | Forwarded: %lu pkts | TX to Drone: %lu bytes\n",
                   WiFi.status() == WL_CONNECTED ? "ONLINE ✓" : "OFFLINE ✗",
-                  wsClient.available() ? "STREAMING ✓" : "CONNECTING ✗",
+                  wsClient.available() ? "STREAMING TO PHONE ✓" : "CONNECTING...",
                   totalRxBytesFromPixhawk,
                   totalMavlinkPacketsSent,
                   totalTxBytesToPixhawk);
