@@ -45,12 +45,12 @@ const char* FALLBACK_SSID = "";
 const char* FALLBACK_PASS = "";
 
 // =====================================================================================
-// 2. CLOUD RELAY WSS CONFIGURATION
+// 2. CLOUD RELAY WSS CONFIGURATION (ACTIVE PRODUCTION RELAY)
 // =====================================================================================
-const char* RELAY_HOST    = "sae-india-relay.onrender.com";
+const char* RELAY_HOST    = "saeindia-relay.onrender.com";
 const uint16_t RELAY_PORT = 443;
-const char* RELAY_PATH    = "/connector?token=saeindia_secret_token_2026";
-const char* RELAY_WSS_URL = "wss://sae-india-relay.onrender.com/connector?token=saeindia_secret_token_2026";
+const char* RELAY_PATH    = "/connector?token=saeindia_sec_99348a7b1c0e";
+const char* RELAY_WSS_URL = "wss://saeindia-relay.onrender.com/connector?token=saeindia_sec_99348a7b1c0e";
 
 // =====================================================================================
 // 3. PIXHAWK TELEM2 UART CONFIGURATION (YOUR EXACT WIRING)
@@ -206,6 +206,7 @@ void connectToCloudRelay() {
   Serial.println("☁️  [WSS] Connecting to Render Cloud Relay via SSL...");
   Serial.printf("🔗 [WSS] URL: %s\n", RELAY_WSS_URL);
   
+  wsClient.setInsecure(); // Bypass SSL CA root verification for reliable WSS handshake
   bool connected = wsClient.connect(RELAY_WSS_URL);
   if (!connected) {
     Serial.println("⚠️  [WSS] Connection attempt failed. Retrying in 3 seconds...");
@@ -218,14 +219,7 @@ void connectToCloudRelay() {
 void setup() {
   // Initialize USB Serial for Monitor
   Serial.begin(115200);
-
-  // Allow up to 3 seconds for Arduino IDE Serial Monitor to open on ESP32-S3
-  unsigned long startSerialWait = millis();
-  while (!Serial && (millis() - startSerialWait < 3000)) {
-    delay(20);
-  }
-
-  delay(200);
+  delay(1000); // 1-second delay for USB/UART to stabilize
 
   Serial.println();
   Serial.println("=========================================================");
@@ -250,7 +244,8 @@ void setup() {
   PixhawkSerial.begin(PIXHAWK_BAUD, SERIAL_8N1, PIXHAWK_RX_PIN, PIXHAWK_TX_PIN);
   Serial.println("✅ [UART] Hardware Serial1 initialized on GPIO 18 (RX) and GPIO 17 (TX).");
 
-  // Configure WebSocket Client callbacks
+  // Configure WebSocket Client callbacks and SSL bypass
+  wsClient.setInsecure();
   wsClient.onMessage(onMessageCallback);
   wsClient.onEvent(onEventsCallback);
 
