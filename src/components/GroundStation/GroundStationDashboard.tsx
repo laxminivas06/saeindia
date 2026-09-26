@@ -16,6 +16,7 @@ import { PixhawkConnectionCard } from '../Drone/PixhawkConnectionCard';
 import { missionEngine } from '../../services/missionEngine';
 import { AutonomousMissionStatusBar } from '../Mission/AutonomousMissionStatusBar';
 import { AutonomousMissionConfigModal } from '../Mission/AutonomousMissionConfigModal';
+import { LoiterTestMissionCard } from '../Mission/LoiterTestMissionCard';
 import {
   Play,
   ShieldAlert,
@@ -294,6 +295,15 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
               </span>
             </div>
           </div>
+
+          {/* ============================================================ */}
+          {/* 5M LOITER TEST MISSION CONFIGURATION (Controlled Test)       */}
+          {/* ============================================================ */}
+          <LoiterTestMissionCard
+            telemetry={telemetry}
+            homePoint={homePoint}
+            pixhawkState={pixhawkState}
+          />
 
           {/* Mission Duration Configuration (Operator/Admin) */}
           <div className="bg-slate-900/90 p-3 sm:p-3.5 rounded-xl border border-slate-800 hud-border font-mono space-y-2.5">
