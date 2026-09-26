@@ -11,6 +11,7 @@ import { PreArmChecksPanel } from '../common/PreArmChecksPanel';
 import { MissionTimer } from '../common/MissionTimer';
 import { AutonomousMissionStatusBar } from '../Mission/AutonomousMissionStatusBar';
 import { AutonomousMissionConfigModal } from '../Mission/AutonomousMissionConfigModal';
+import { LoiterTestMissionCard } from '../Mission/LoiterTestMissionCard';
 import {
   Play,
   RotateCcw,
@@ -562,6 +563,13 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
 
         {/* Right: Target Confirmation, Telemetry Deck, & Pre-Arm Panel */}
         <div className="lg:col-span-5 space-y-4">
+          {/* Predefined 5M Loiter Test Mission Card */}
+          <LoiterTestMissionCard
+            telemetry={telemetry}
+            homePoint={homePoint}
+            pixhawkState={pixhawkState}
+          />
+
           {/* Decoded QR Target Result */}
           <QRResultCard
             decodedQR={decodedQR}
