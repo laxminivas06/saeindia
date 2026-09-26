@@ -70,6 +70,7 @@ export const AutonomousMissionConfigModal: React.FC<AutonomousMissionConfigModal
 
   // 9-point validation state
   const [validation, setValidation] = useState<AutonomousMissionValidation>(missionEngine.validateMission());
+  const [forceBypassChecks, setForceBypassChecks] = useState<boolean>(() => missionEngine.getForceBypassChecks());
 
   // Mission Selection Tab: Standard Autonomous Search vs 5M_LOITER_TEST
   const [activeMissionTab, setActiveMissionTab] = useState<'AUTONOMOUS_SEARCH' | '5M_LOITER_TEST'>('AUTONOMOUS_SEARCH');
@@ -170,6 +171,8 @@ export const AutonomousMissionConfigModal: React.FC<AutonomousMissionConfigModal
 
   const handleStart = () => {
     handleSaveMission();
+    missionEngine.setForceBypassChecks(forceBypassChecks);
+    missionEngine.startMission(forceBypassChecks);
     onStartMission();
     onClose();
   };
@@ -835,12 +838,34 @@ export const AutonomousMissionConfigModal: React.FC<AutonomousMissionConfigModal
               )}
             </div>
           ) : (
-            <div className="flex items-center space-x-3 ml-auto">
+            <div className="flex flex-wrap items-center space-x-3 ml-auto gap-2">
+              {/* Force Bypass Checkbox */}
+              <label className={`flex items-center space-x-2 text-xs font-semibold select-none cursor-pointer px-3 py-2 rounded-xl transition border ${
+                forceBypassChecks
+                  ? 'bg-amber-950/80 border-amber-500/80 text-amber-200'
+                  : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-300'
+              }`}>
+                <input
+                  type="checkbox"
+                  id="modal-bypass-prearm-checkbox"
+                  checked={forceBypassChecks}
+                  onChange={(e) => {
+                    setForceBypassChecks(e.target.checked);
+                    missionEngine.setForceBypassChecks(e.target.checked);
+                  }}
+                  className="w-4 h-4 rounded text-amber-500 accent-amber-500 focus:ring-0 cursor-pointer"
+                />
+                <span>
+                  <span className="font-bold text-amber-300">No problem, Start Mission</span>{' '}
+                  <span className="text-[10px] text-slate-400">(Bypass Checks)</span>
+                </span>
+              </label>
+
               {/* SAVE MISSION BUTTON */}
               <button
                 type="button"
                 onClick={handleSaveMission}
-                className="px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 active:bg-slate-900 border border-slate-700 text-slate-200 text-xs font-black uppercase tracking-wider flex items-center space-x-2 transition cursor-pointer"
+                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 active:bg-slate-900 border border-slate-700 text-slate-200 text-xs font-black uppercase tracking-wider flex items-center space-x-2 transition cursor-pointer"
               >
                 <Save className="w-4 h-4 text-amber-400" />
                 <span>SAVE MISSION</span>
@@ -849,13 +874,20 @@ export const AutonomousMissionConfigModal: React.FC<AutonomousMissionConfigModal
               {/* START MISSION BUTTON */}
               <button
                 type="button"
-                disabled={!validation.isValid || isMissionActive}
+                disabled={(!validation.isValid && !forceBypassChecks) || isMissionActive}
                 onClick={handleStart}
                 className={`px-6 py-2.5 rounded-xl font-black text-xs sm:text-sm uppercase tracking-wider flex items-center space-x-2 transition shadow-lg ${
-                  validation.isValid && !isMissionActive
+                  (validation.isValid || forceBypassChecks) && !isMissionActive
                     ? 'bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white shadow-emerald-600/30 cursor-pointer animate-pulse'
                     : 'bg-slate-800 text-slate-500 border border-slate-700/50 cursor-not-allowed'
                 }`}
+                title={
+                  forceBypassChecks
+                    ? 'FORCE START: Checks bypassed by user override'
+                    : !validation.isValid
+                    ? 'START DISABLED: Check conditions or check "No problem, Start Mission"'
+                    : 'Start Autonomous Mission'
+                }
               >
                 <Play className="w-4 h-4 fill-current" />
                 <span>START MISSION</span>

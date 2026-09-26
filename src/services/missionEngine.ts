@@ -99,6 +99,7 @@ class MissionEngine {
   // Safety & Failsafe Watchdog Monitor
   private failsafeWatchdogTimer: any = null;
   private rtlCommandSent: boolean = false;
+  private forceBypassChecks: boolean = false;
 
   constructor() {
     this.currentMissionNumber = storageService.getNextMissionNumber();
@@ -804,23 +805,38 @@ class MissionEngine {
     return false;
   }
 
+  public setForceBypassChecks(val: boolean) {
+    this.forceBypassChecks = val;
+  }
+
+  public getForceBypassChecks(): boolean {
+    return this.forceBypassChecks;
+  }
+
   /**
    * Start Autonomous Mission:
-   * Sets command authority to AUTONOMOUS, arms Pixhawk, and automatically commands climb.
+   * Sets command authority to AUTONOMOUS, arms Pixhawk (or directly takes off if already armed), and automatically commands climb.
+   * If forceOverride is true, bypasses pre-arm checks and pre-flight validation.
    */
-  public startMission(): boolean {
-    const validation = this.validateMission();
-    if (!validation.isValid) {
-      audioService.playBeep(300, 300, 'sawtooth');
-      console.warn('Cannot start mission: Pre-flight validation failed', validation.errors);
-      return false;
-    }
+  public startMission(forceOverride?: boolean): boolean {
+    const shouldBypass = forceOverride !== undefined ? forceOverride : this.forceBypassChecks;
 
-    const safety = mavlinkService.evaluatePreArmSafety();
-    if (!safety.passed) {
-      audioService.playBeep(300, 300, 'sawtooth');
-      console.warn('Cannot start mission: Pre-arm safety check failed', safety.reason);
-      return false;
+    if (!shouldBypass) {
+      const validation = this.validateMission();
+      if (!validation.isValid) {
+        audioService.playBeep(300, 300, 'sawtooth');
+        console.warn('Cannot start mission: Pre-flight validation failed', validation.errors);
+        return false;
+      }
+
+      const safety = mavlinkService.evaluatePreArmSafety();
+      if (!safety.passed) {
+        audioService.playBeep(300, 300, 'sawtooth');
+        console.warn('Cannot start mission: Pre-arm safety check failed', safety.reason);
+        return false;
+      }
+    } else {
+      console.log('⚡ [MISSION OVERRIDE] Starting mission with pre-arm checks and validation bypassed by user.');
     }
 
     this.currentMissionId = `SAE_MSN_${String(this.currentMissionNumber).padStart(3, '0')}`;
@@ -836,19 +852,33 @@ class MissionEngine {
     this.commandAuthority = 'AUTONOMOUS';
     this.notifyAuthority();
 
-    // Step 1: Request Arming from Pixhawk
+    // If drone is ALREADY ARMED, skip arming wait and directly command climb/takeoff
+    const telemetry = mavlinkService.getTelemetry();
+    if (telemetry.isArmed) {
+      console.log('⚡ [MISSION] Drone is ALREADY ARMED! Directly executing autonomous climb & mission start.');
+      this.isAwaitingFcMotorStart = true;
+      this.onFcMotorsStartedConfirmed();
+      return true;
+    }
+
+    // Step 1: Request Arming from Pixhawk (passing shouldBypass to send param2=21196.0 force arm)
     this.isAwaitingFcMotorStart = true;
     this.transitionTo('STARTING', 'Sending MAVLink ARM command. Waiting for Pixhawk FC motor spin confirmation...');
 
     audioService.playBeep(784, 120);
     audioService.triggerHaptic('medium');
 
-    mavlinkService.sendArmCommand();
+    mavlinkService.sendArmCommand(shouldBypass);
 
     if (this.armingTimeoutTimer) clearTimeout(this.armingTimeoutTimer);
     this.armingTimeoutTimer = setTimeout(() => {
       if (this.isAwaitingFcMotorStart) {
-        this.onFcArmingRejected('Pixhawk FC Arming Timeout: Motors did not start. Check Safety Switch / Gyros.');
+        const currentTel = mavlinkService.getTelemetry();
+        if (currentTel.isArmed) {
+          this.onFcMotorsStartedConfirmed();
+        } else {
+          this.onFcArmingRejected('Pixhawk FC Arming Timeout: Motors did not start. Check Safety Switch / Gyros.');
+        }
       }
     }, 8000);
 

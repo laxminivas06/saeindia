@@ -68,6 +68,7 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
   const [armFeedback, setArmFeedback] = useState<string | null>(null);
   const [showHardware, setShowHardware] = useState(false);
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
+  const [forceBypassChecks, setForceBypassChecks] = useState<boolean>(() => missionEngine.getForceBypassChecks());
 
   const missionValidation = missionEngine.validateMission();
   const missionConfig = missionEngine.getMissionConfig();
@@ -383,16 +384,49 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
             missionState={missionState}
           />
 
+          {/* "No problem, Start Mission" Checkbox (Bypasses Pre-Arm & Validation Blocks) */}
+          <div className="mb-2">
+            <label className={`flex items-center space-x-2.5 text-xs font-semibold select-none cursor-pointer px-3 py-2 rounded-xl transition border ${
+              forceBypassChecks
+                ? 'bg-amber-950/80 border-amber-500/80 text-amber-200 shadow-md shadow-amber-950/40'
+                : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-300'
+            }`}>
+              <input
+                type="checkbox"
+                id="gcs-bypass-prearm-checkbox"
+                checked={forceBypassChecks}
+                onChange={(e) => {
+                  setForceBypassChecks(e.target.checked);
+                  missionEngine.setForceBypassChecks(e.target.checked);
+                }}
+                className="w-4 h-4 rounded text-amber-500 accent-amber-500 focus:ring-0 cursor-pointer"
+              />
+              <span className="flex-1 leading-tight">
+                <span className="font-bold text-amber-300">No problem, Start Mission</span>
+                <span className="block text-[10px] text-slate-400 font-mono">Bypass Pre-Arm checks & errors</span>
+              </span>
+            </label>
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <button
-              onClick={onStartMission}
-              disabled={!missionValidation.isValid || isMissionActive}
+              onClick={() => {
+                missionEngine.startMission(forceBypassChecks);
+                onStartMission();
+              }}
+              disabled={(!missionValidation.isValid && !forceBypassChecks) || isMissionActive}
               className={`py-3.5 sm:py-4 px-3 rounded-xl font-black text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center space-x-2 transition shadow-lg ${
-                missionValidation.isValid && !isMissionActive
+                (missionValidation.isValid || forceBypassChecks) && !isMissionActive
                   ? 'bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white shadow-sky-600/30 cursor-pointer animate-pulse'
                   : 'bg-slate-800/80 text-slate-500 border border-slate-700/50 cursor-not-allowed'
               }`}
-              title={!missionValidation.isValid ? 'START DISABLED: Satisfy all 9 pre-flight validation conditions' : 'Start Autonomous Mission'}
+              title={
+                forceBypassChecks
+                  ? 'FORCE START: Checks bypassed by user override'
+                  : !missionValidation.isValid
+                  ? 'START DISABLED: Satisfy pre-flight conditions or check "No problem, Start Mission"'
+                  : 'Start Autonomous Mission'
+              }
             >
               <Play className="w-4 h-4 fill-current" />
               <span>START MISSION</span>

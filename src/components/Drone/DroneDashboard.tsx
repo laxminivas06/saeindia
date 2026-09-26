@@ -83,6 +83,7 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
   const [isDisarmingInProgress, setIsDisarmingInProgress] = useState<boolean>(false);
   const [armError, setArmError] = useState<string | null>(null);
   const [isConfigModalOpen, setIsConfigModalOpen] = useState<boolean>(false);
+  const [forceBypassChecks, setForceBypassChecks] = useState<boolean>(() => missionEngine.getForceBypassChecks());
 
   // RTL Confirmation Modal State
   const [isRtlConfirmOpen, setIsRtlConfirmOpen] = useState<boolean>(false);
@@ -226,15 +227,17 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
     setArmError(null);
     setPreArmError(null);
 
-    const check = missionEngine.validateMission();
-    if (!check.isValid) {
-      setPreArmError(check.errors.join(' | '));
-      return;
+    if (!forceBypassChecks) {
+      const check = missionEngine.validateMission();
+      if (!check.isValid) {
+        setPreArmError(check.errors.join(' | '));
+        return;
+      }
     }
 
-    const res = missionEngine.startMission();
+    const res = missionEngine.startMission(forceBypassChecks);
     if (!res) {
-      setArmError('Mission start rejected: Safety checks failed.');
+      setArmError('Mission start rejected. Check connection or FC safety switch.');
     }
   };
 
@@ -465,13 +468,43 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
             </div>
           </div>
 
+          {/* "No problem, Start Mission" Checkbox (Bypasses Pre-Arm & Validation Blocks) */}
+          <div className="mb-2.5">
+            <label className={`flex items-center space-x-2.5 text-xs font-semibold select-none cursor-pointer px-3 py-2 rounded-xl transition border ${
+              forceBypassChecks
+                ? 'bg-amber-950/80 border-amber-500/80 text-amber-200 shadow-md shadow-amber-950/40'
+                : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-300'
+            }`}>
+              <input
+                type="checkbox"
+                id="bypass-prearm-checkbox"
+                checked={forceBypassChecks}
+                onChange={(e) => {
+                  setForceBypassChecks(e.target.checked);
+                  missionEngine.setForceBypassChecks(e.target.checked);
+                }}
+                className="w-4 h-4 rounded text-amber-500 accent-amber-500 focus:ring-0 cursor-pointer"
+              />
+              <span className="flex-1 leading-tight">
+                <span className="font-bold text-amber-300">No problem, Start Mission</span>
+                <span className="block text-[10px] text-slate-400 font-mono">Bypass Pre-Arm checks & errors (Drone ready to fly)</span>
+              </span>
+            </label>
+          </div>
+
           {/* Action Buttons: START MISSION vs RTL — RETURN TO LAUNCH */}
           <div className="grid grid-cols-2 gap-2.5">
             {/* START MISSION BUTTON */}
             <button
               type="button"
               onClick={handleStartMissionClick}
-              disabled={isMissionRunning || isMissionCompleted || !pixhawkState.isConnected || !missionValidation.isValid || commandAuthority === 'MANUAL'}
+              disabled={
+                isMissionRunning ||
+                isMissionCompleted ||
+                (!pixhawkState.isConnected && !forceBypassChecks) ||
+                (!missionValidation.isValid && !forceBypassChecks) ||
+                commandAuthority === 'MANUAL'
+              }
               className={`py-3.5 px-3 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center space-x-1.5 transition shadow-lg ${
                 missionState === 'STARTING'
                   ? 'bg-amber-600 text-white animate-pulse'
@@ -481,11 +514,17 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
                   ? 'bg-emerald-800 text-emerald-200 border border-emerald-500 cursor-default'
                   : isMissionAborted
                   ? 'bg-rose-950 border border-rose-500 text-rose-300'
-                  : pixhawkState.isConnected && missionValidation.isValid && commandAuthority !== 'MANUAL'
+                  : (missionValidation.isValid || forceBypassChecks) && commandAuthority !== 'MANUAL'
                   ? 'bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white shadow-emerald-600/30 cursor-pointer animate-pulse'
                   : 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
               }`}
-              title={!missionValidation.isValid ? 'START DISABLED: Check 9 pre-flight validation conditions' : 'Start Autonomous Search & QR Rescue Mission'}
+              title={
+                forceBypassChecks
+                  ? 'FORCE START: Pre-arm checks bypassed by user override'
+                  : !missionValidation.isValid
+                  ? 'START DISABLED: Check pre-flight validation conditions (or check "No problem, Start Mission" above)'
+                  : 'Start Autonomous Search & QR Rescue Mission'
+              }
             >
               {missionState === 'STARTING' ? (
                 <>
