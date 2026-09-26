@@ -115,14 +115,18 @@ function handleConnectorConnection(ws) {
   }
 
   connectorSocket = ws;
-  esp32Online = false;
+  esp32Online = true;
   esp32LastError = '';
 
-  // Notify all browsers that connector is now online
+  // Notify all browsers that connector / ESP32 is now online
   broadcastStatusToBrowsers();
 
   ws.on('message', (data, isBinary) => {
     if (isBinary) {
+      if (!esp32Online) {
+        esp32Online = true;
+        broadcastStatusToBrowsers();
+      }
       // Binary frame from ESP32 -> Forward to all connected browsers
       rxBytesTotal += data.length;
       packetsForwarded++;
