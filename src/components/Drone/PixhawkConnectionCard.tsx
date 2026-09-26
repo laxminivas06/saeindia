@@ -149,8 +149,12 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
   const esp32Mode: 'LOCAL' | 'SECURE' = isHttpsOrigin || protocolMode === 'WSS' ? 'SECURE' : 'LOCAL';
   const cleanPath = esp32Path ? (esp32Path.startsWith('/') ? esp32Path : `/${esp32Path}`) : '';
   const effectiveProto = esp32Mode === 'SECURE' ? 'wss' : 'ws';
-  const targetHost = (esp32Mode === 'SECURE' && esp32SecureEndpoint) ? esp32SecureEndpoint.replace(/^wss?:\/\//i, '') : `${esp32Host}:${esp32Port}`;
-  const resolvedTargetUrl = `${effectiveProto}://${targetHost}${cleanPath}`;
+  const targetHost = (esp32Mode === 'SECURE' && esp32SecureEndpoint) 
+    ? esp32SecureEndpoint.replace(/^wss?:\/\//i, '').replace(/\/+$/, '') 
+    : `${esp32Host}:${esp32Port}`;
+  const resolvedTargetUrl = (esp32Mode === 'SECURE' && targetHost.includes('/'))
+    ? `${effectiveProto}://${targetHost}`
+    : `${effectiveProto}://${targetHost}${cleanPath}`;
 
   // Five Clear Connection States
   const linkState: 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED' | 'RECONNECTING' | 'ERROR' = (() => {
