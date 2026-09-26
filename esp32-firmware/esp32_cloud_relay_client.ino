@@ -2,6 +2,7 @@
  * =====================================================================================
  * SAE INDIA — Autonomous Drone Rescue System
  * ESP32-S3 Cloud Relay Direct WSS Client (Standalone / Zero-Laptop Mode)
+ * With Comprehensive Live Serial Monitor Diagnostics
  * =====================================================================================
  *
  * HARDWARE: ESP32-S3
@@ -16,26 +17,15 @@
  *   Pin 5  RTS        ───────────────  NC
  *   Pin 6  GND        ───────────────  GND (Common Ground)
  *
+ * ARDUINO IDE SETTINGS (CRITICAL FOR ESP32-S3 SERIAL MONITOR):
+ *   1. Tools -> Board -> "ESP32S3 Dev Module"
+ *   2. Tools -> USB CDC On Boot -> "Enabled"  <-- CRITICAL to see Serial output!
+ *   3. Tools -> Upload Mode -> "UART0 / Hardware CDC" or "USB-OTG CDC"
+ *   4. Set Serial Monitor Baud Rate to: 115200
+ *
  * MISSION PLANNER PARAMETERS (TELEM2):
  *   SERIAL2_PROTOCOL = 2   (MAVLink 2)
  *   SERIAL2_BAUD     = 57  (57600 baud)
- *
- * ARCHITECTURE (NO LAPTOP NEEDED IN FIELD):
- *   [Pixhawk TELEM2]
- *          ↕ UART (GPIO 18 RX / GPIO 17 TX @ 57600 baud)
- *     [ESP32-S3]
- *          ↕ Direct WSS Client (via Phone Hotspot or Wi-Fi)
- *   [Render Cloud Relay: wss://sae-india-relay.onrender.com/connector]
- *          ↕ Secure WSS
- *   [Your Phone: https://saeindia-umber.vercel.app]
- *
- * REQUIRED ARDUINO LIBRARY:
- *   In Arduino IDE -> Sketch -> Include Library -> Manage Libraries...
- *   Search for and install: "ArduinoWebsockets" by Gil Maimon (v0.5.3 or higher)
- *
- * ARDUINO IDE BOARD SETTINGS:
- *   Tools -> Board -> ESP32 Arduino -> "ESP32S3 Dev Module"
- *   Tools -> USB CDC On Boot -> "Enabled"
  * =====================================================================================
  */
 
@@ -46,13 +36,13 @@
 // =====================================================================================
 // 1. WI-FI CONFIGURATION (Phone Hotspot or Field Wi-Fi)
 // =====================================================================================
-// Enter your Phone's Personal Hotspot or field Wi-Fi credentials here:
-const char* WIFI_SSID     = "DRONE_WIFI_2.4G";      // <-- YOUR PHONE HOTSPOT OR WI-FI NAME
-const char* WIFI_PASSWORD = "your_wifi_password";   // <-- YOUR PASSWORD
+// Change to your Phone's Personal Hotspot or home Wi-Fi credentials:
+const char* WIFI_SSID     = "DRONE_WIFI_2.4G";      // <-- Enter your hotspot/Wi-Fi name
+const char* WIFI_PASSWORD = "your_wifi_password";   // <-- Enter your Wi-Fi password
 
-// Optional Fallback Wi-Fi (e.g. Home Wi-Fi when testing indoors)
-const char* FALLBACK_SSID = "HOME_WIFI";
-const char* FALLBACK_PASS = "home_password";
+// Optional Fallback Wi-Fi
+const char* FALLBACK_SSID = "";
+const char* FALLBACK_PASS = "";
 
 // =====================================================================================
 // 2. CLOUD RELAY WSS CONFIGURATION
@@ -65,17 +55,15 @@ const char* RELAY_WSS_URL = "wss://sae-india-relay.onrender.com/connector?token=
 // =====================================================================================
 // 3. PIXHAWK TELEM2 UART CONFIGURATION (YOUR EXACT WIRING)
 // =====================================================================================
-// Pixhawk TELEM2 Pin 2 (TX) -> ESP32-S3 GPIO 18 (RX)
-// Pixhawk TELEM2 Pin 3 (RX) -> ESP32-S3 GPIO 17 (TX)
-#define PIXHAWK_RX_PIN    18     // ESP32-S3 GPIO 18 (RX)
-#define PIXHAWK_TX_PIN    17     // ESP32-S3 GPIO 17 (TX)
-#define PIXHAWK_BAUD      57600  // Standard Pixhawk TELEM2 baud rate (SERIAL2_BAUD = 57)
+#define PIXHAWK_RX_PIN    18     // ESP32-S3 GPIO 18 connects to Pixhawk TELEM2 Pin 2 (TX)
+#define PIXHAWK_TX_PIN    17     // ESP32-S3 GPIO 17 connects to Pixhawk TELEM2 Pin 3 (RX)
+#define PIXHAWK_BAUD      57600  // Standard Pixhawk TELEM2 baud (SERIAL2_BAUD = 57)
 
-// Status LED (GPIO 2 or GPIO 21 on ESP32-S3, set to -1 if your board doesn't have one)
+// Status LED (GPIO 2, set to -1 if your S3 board has no onboard LED)
 #define STATUS_LED_PIN    2
 
 // =====================================================================================
-// GLOBAL OBJECTS & STATE
+// GLOBAL OBJECTS & TELEMETRY COUNTERS
 // =====================================================================================
 using namespace websockets;
 WebsocketsClient wsClient;
@@ -84,10 +72,20 @@ WebsocketsClient wsClient;
 HardwareSerial PixhawkSerial(1);
 
 unsigned long lastPingTime = 0;
-const unsigned long PING_INTERVAL_MS = 15000; // Ping every 15s to keep cloud connection alive
+const unsigned long PING_INTERVAL_MS = 15000;
 
 unsigned long lastReconnectAttempt = 0;
 const unsigned long RECONNECT_INTERVAL_MS = 3000;
+
+// Periodic 3-second live diagnostic print timer
+unsigned long lastDiagnosticPrint = 0;
+const unsigned long DIAGNOSTIC_INTERVAL_MS = 3000;
+
+// Cumulative statistics
+unsigned long totalRxBytesFromPixhawk = 0;
+unsigned long totalTxBytesToPixhawk   = 0;
+unsigned long totalMavlinkPacketsSent = 0;
+unsigned long totalCommandsReceived   = 0;
 
 // UART Buffer
 #define UART_BUFFER_SIZE 1024
@@ -98,15 +96,12 @@ uint8_t uartBuffer[UART_BUFFER_SIZE];
 // =====================================================================================
 void updateLED(int mode) {
   if (STATUS_LED_PIN < 0) return;
-  // 0 = OFF (Disconnected)
-  // 1 = Blinking (Connecting)
-  // 2 = Solid ON (Connected & Streaming)
   if (mode == 2) {
-    digitalWrite(STATUS_LED_PIN, HIGH);
+    digitalWrite(STATUS_LED_PIN, HIGH); // Solid ON (Connected)
   } else if (mode == 0) {
-    digitalWrite(STATUS_LED_PIN, LOW);
+    digitalWrite(STATUS_LED_PIN, LOW);  // OFF
   } else {
-    digitalWrite(STATUS_LED_PIN, (millis() / 250) % 2);
+    digitalWrite(STATUS_LED_PIN, (millis() / 250) % 2); // Blinking (Connecting)
   }
 }
 
@@ -115,30 +110,39 @@ void updateLED(int mode) {
 // =====================================================================================
 void onMessageCallback(WebsocketsMessage message) {
   if (message.isBinary()) {
-    // Binary MAVLink frame received from Phone / Web App -> Write to Pixhawk TELEM2
+    // Binary MAVLink command frame received from Phone -> Forward to Pixhawk TELEM2
     const uint8_t* payload = (const uint8_t*)message.c_str();
     size_t length = message.length();
     PixhawkSerial.write(payload, length);
+
+    totalTxBytesToPixhawk += length;
+    totalCommandsReceived++;
+
+    Serial.printf("📥 [PHONE -> PIXHAWK] Command received (%u bytes) -> Sent to TELEM2 (Total TX: %lu bytes)\n",
+                  length, totalTxBytesToPixhawk);
   } else if (message.isText()) {
-    Serial.print("[RELAY MSG] ");
-    Serial.println(message.data());
+    Serial.printf("ℹ️ [RELAY MESSAGE] %s\n", message.data().c_str());
   }
 }
 
 void onEventsCallback(WebsocketsEvent event, String data) {
   if (event == WebsocketsEvent::ConnectionOpened) {
-    Serial.println("\n[WSS] >>> CONNECTED TO CLOUD RELAY (RENDER) SUCCESSFULLY! <<<");
+    Serial.println("\n");
+    Serial.println("*********************************************************");
+    Serial.println("🟢 [WSS CLOUD RELAY] >>> CONNECTED SUCCESSFULLY! <<<");
+    Serial.println("🌐 Drone is now online in the cloud. Phone webapp ready!");
+    Serial.println("*********************************************************\n");
     updateLED(2);
 
-    // Announce to relay that ESP32-S3 is directly connected
+    // Announce connection to relay server
     wsClient.send("{\"type\":\"ESP32_STATUS\",\"status\":\"CONNECTED\",\"device\":\"ESP32_S3_STANDALONE\"}");
   } else if (event == WebsocketsEvent::ConnectionClosed) {
-    Serial.println("\n[WSS] Connection Closed to Cloud Relay. Retrying...");
+    Serial.println("\n🔴 [WSS CLOUD RELAY] Connection closed. Will reconnect automatically...");
     updateLED(0);
   } else if (event == WebsocketsEvent::GotPing) {
-    // wsClient automatically responds with Pong
+    // Ping acknowledged
   } else if (event == WebsocketsEvent::GotPong) {
-    // Connection alive
+    // Pong received
   }
 }
 
@@ -148,35 +152,44 @@ void onEventsCallback(WebsocketsEvent event, String data) {
 void connectToWiFi() {
   if (WiFi.status() == WL_CONNECTED) return;
 
-  Serial.printf("\n[WIFI] Connecting to %s ...", WIFI_SSID);
+  Serial.println("---------------------------------------------------------");
+  Serial.printf("📡 [WIFI] Connecting to SSID: '%s' ...\n", WIFI_SSID);
+  Serial.println("---------------------------------------------------------");
+  
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
   unsigned long startAttempt = millis();
+  int dotCount = 0;
   while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 10000) {
-    delay(300);
+    delay(400);
     Serial.print(".");
+    dotCount++;
+    if (dotCount % 30 == 0) Serial.println();
     updateLED(1);
   }
 
-  // If primary Wi-Fi timed out, try fallback
+  // Fallback Wi-Fi check
   if (WiFi.status() != WL_CONNECTED && strlen(FALLBACK_SSID) > 0) {
-    Serial.printf("\n[WIFI] Primary failed. Trying fallback %s ...", FALLBACK_SSID);
+    Serial.printf("\n📡 [WIFI] Trying fallback SSID: '%s' ...\n", FALLBACK_SSID);
     WiFi.begin(FALLBACK_SSID, FALLBACK_PASS);
     startAttempt = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 10000) {
-      delay(300);
+      delay(400);
       Serial.print(".");
       updateLED(1);
     }
   }
 
+  Serial.println();
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n[WIFI] CONNECTED TO NETWORK!");
-    Serial.print("[WIFI] IP Address: ");
-    Serial.println(WiFi.localIP());
+    Serial.println("🟢 [WIFI] CONNECTED SUCCESSFULLY!");
+    Serial.printf("📍 [WIFI] IP Address:    %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("📶 [WIFI] Signal (RSSI):  %d dBm\n", WiFi.RSSI());
+    Serial.printf("🚪 [WIFI] Gateway:        %s\n", WiFi.gatewayIP().toString().c_str());
+    Serial.println("---------------------------------------------------------");
   } else {
-    Serial.println("\n[WIFI] Not connected. Will retry in main loop.");
+    Serial.println("❌ [WIFI FAILED] Could not connect to Wi-Fi. Check SSID and password.");
   }
 }
 
@@ -190,13 +203,12 @@ void connectToCloudRelay() {
   if (millis() - lastReconnectAttempt < RECONNECT_INTERVAL_MS) return;
   lastReconnectAttempt = millis();
 
-  Serial.println("[WSS] Dialing Render Cloud Relay via SSL...");
-  Serial.printf("[WSS] %s\n", RELAY_WSS_URL);
+  Serial.println("☁️  [WSS] Connecting to Render Cloud Relay via SSL...");
+  Serial.printf("🔗 [WSS] URL: %s\n", RELAY_WSS_URL);
   
-  // Connect via secure WSS to Render
   bool connected = wsClient.connect(RELAY_WSS_URL);
   if (!connected) {
-    Serial.println("[WSS] Connection attempt failed. Will retry automatically.");
+    Serial.println("⚠️  [WSS] Connection attempt failed. Retrying in 3 seconds...");
   }
 }
 
@@ -204,24 +216,39 @@ void connectToCloudRelay() {
 // SETUP
 // =====================================================================================
 void setup() {
-  // Debug USB Serial Monitor
+  // Initialize USB Serial for Monitor
   Serial.begin(115200);
-  delay(1000);
-  Serial.println("\n=======================================================");
+
+  // Allow up to 3 seconds for Arduino IDE Serial Monitor to open on ESP32-S3
+  unsigned long startSerialWait = millis();
+  while (!Serial && (millis() - startSerialWait < 3000)) {
+    delay(20);
+  }
+
+  delay(200);
+
+  Serial.println();
+  Serial.println("=========================================================");
   Serial.println("🚀 SAE INDIA — ESP32-S3 DIRECT CLOUD RELAY CLIENT");
-  Serial.println("=======================================================");
+  Serial.println("   Standalone Phone-to-Drone MAVLink Bridge");
+  Serial.println("=========================================================");
+  Serial.printf("📋 Hardware Target:     ESP32-S3\n");
+  Serial.printf("🔌 Pixhawk TELEM2 RX:   GPIO %d (Connects to Pixhawk TX Pin 2)\n", PIXHAWK_RX_PIN);
+  Serial.printf("🔌 Pixhawk TELEM2 TX:   GPIO %d (Connects to Pixhawk RX Pin 3)\n", PIXHAWK_TX_PIN);
+  Serial.printf("⚡ Pixhawk Baud Rate:   %d baud\n", PIXHAWK_BAUD);
+  Serial.printf("☁️  Cloud Relay Host:   %s\n", RELAY_HOST);
+  Serial.println("=========================================================\n");
 
   if (STATUS_LED_PIN >= 0) {
     pinMode(STATUS_LED_PIN, OUTPUT);
     digitalWrite(STATUS_LED_PIN, LOW);
   }
 
-  // Initialize Pixhawk Hardware UART1 with YOUR EXACT PINOUT:
-  // RX = GPIO 18 (receives from Pixhawk TX Pin 2)
-  // TX = GPIO 17 (transmits to Pixhawk RX Pin 3)
+  // Initialize Pixhawk Hardware UART1:
+  // RX = GPIO 18 (connects to Pixhawk TELEM2 Pin 2 TX)
+  // TX = GPIO 17 (connects to Pixhawk TELEM2 Pin 3 RX)
   PixhawkSerial.begin(PIXHAWK_BAUD, SERIAL_8N1, PIXHAWK_RX_PIN, PIXHAWK_TX_PIN);
-  Serial.printf("[UART] Pixhawk TELEM2 initialized: RX=GPIO%d, TX=GPIO%d @ %d baud\n", 
-                PIXHAWK_RX_PIN, PIXHAWK_TX_PIN, PIXHAWK_BAUD);
+  Serial.println("✅ [UART] Hardware Serial1 initialized on GPIO 18 (RX) and GPIO 17 (TX).");
 
   // Configure WebSocket Client callbacks
   wsClient.onMessage(onMessageCallback);
@@ -248,7 +275,7 @@ void loop() {
     updateLED(1);
     connectToCloudRelay();
   } else {
-    updateLED(2); // Solid ON when connected and ready
+    updateLED(2); // Solid ON when fully connected
   }
 
   // 3. Poll WebSocket Client for incoming commands from Phone
@@ -262,13 +289,42 @@ void loop() {
 
   // 5. Read binary MAVLink telemetry from Pixhawk TELEM2 -> Forward to Cloud Relay
   size_t bytesAvailable = PixhawkSerial.available();
-  if (bytesAvailable > 0 && wsClient.available()) {
+  if (bytesAvailable > 0) {
     size_t bytesToRead = (bytesAvailable > UART_BUFFER_SIZE) ? UART_BUFFER_SIZE : bytesAvailable;
     size_t bytesRead = PixhawkSerial.readBytes(uartBuffer, bytesToRead);
 
     if (bytesRead > 0) {
-      // Send binary frame to cloud relay (which forwards instantly to your phone)
-      wsClient.sendBinary((const char*)uartBuffer, bytesRead);
+      totalRxBytesFromPixhawk += bytesRead;
+
+      // Identify MAVLink Packet Magic Byte (0xFD = MAVLink v2, 0xFE = MAVLink v1)
+      bool isMavlink = (uartBuffer[0] == 0xFD || uartBuffer[0] == 0xFE);
+      const char* proto = (uartBuffer[0] == 0xFD) ? "MAVLink2" : ((uartBuffer[0] == 0xFE) ? "MAVLink1" : "Raw Data");
+
+      // Forward to Cloud Relay if connected
+      if (wsClient.available()) {
+        wsClient.sendBinary((const char*)uartBuffer, bytesRead);
+        totalMavlinkPacketsSent++;
+      }
+
+      // Live print to Serial Monitor
+      Serial.printf("📤 [PIXHAWK -> CLOUD] %u bytes [%s] -> %s (Total: %lu bytes | Pkts: %lu)\n",
+                    bytesRead,
+                    proto,
+                    wsClient.available() ? "STREAMING TO PHONE ✓" : "BUFFERED (WSS offline) ✗",
+                    totalRxBytesFromPixhawk,
+                    totalMavlinkPacketsSent);
     }
+  }
+
+  // 6. Periodic 3-Second Live Status Heartbeat (Guarantees Serial Monitor is never silent)
+  if (millis() - lastDiagnosticPrint > DIAGNOSTIC_INTERVAL_MS) {
+    lastDiagnosticPrint = millis();
+
+    Serial.printf("📊 [MONITOR] Wi-Fi: %s | Cloud WSS: %s | Pixhawk RX: %lu bytes (%lu pkts) | Phone TX: %lu bytes\n",
+                  WiFi.status() == WL_CONNECTED ? "ONLINE ✓" : "OFFLINE ✗",
+                  wsClient.available() ? "STREAMING ✓" : "CONNECTING ✗",
+                  totalRxBytesFromPixhawk,
+                  totalMavlinkPacketsSent,
+                  totalTxBytesToPixhawk);
   }
 }
