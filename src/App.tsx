@@ -14,10 +14,12 @@ import { DroneDashboard } from './components/Drone/DroneDashboard';
 import { RunnerDashboard } from './components/Runner/RunnerDashboard';
 import { MultiRoleSimBench } from './components/Testbench/MultiRoleSimBench';
 import { MissionHistoryModal } from './components/History/MissionHistoryModal';
+import { HardwareConnectionModal } from './components/Drone/HardwareConnectionModal';
 
 export const App: React.FC = () => {
   const [session, setSession] = useState<UserSession | null>(authService.getSession());
   const [historyOpen, setHistoryOpen] = useState<boolean>(false);
+  const [isConnectionModalOpen, setIsConnectionModalOpen] = useState<boolean>(false);
 
   // Core Real-Time State
   const [telemetry, setTelemetry] = useState<DroneTelemetry>(mavlinkService.getTelemetry());
@@ -141,6 +143,7 @@ export const App: React.FC = () => {
         runnerLink={runnerLink}
         onSwitchRole={handleLogout}
         onOpenHistory={() => setHistoryOpen(true)}
+        onOpenConnectionModal={() => setIsConnectionModalOpen(true)}
         onResetMission={handleResetMission}
       />
 
@@ -160,6 +163,7 @@ export const App: React.FC = () => {
             onSetHomePoint={handleSetHomePoint}
             onStartMission={handleStartMission}
             onEmergencyRTL={handleEmergencyRTL}
+            onOpenConnectionModal={() => setIsConnectionModalOpen(true)}
           />
         )}
 
@@ -176,6 +180,7 @@ export const App: React.FC = () => {
             runnerAckLatencyMs={runnerAckLatencyMs}
             onQRDetected={handleQRDetected}
             onEmergencyRTL={handleEmergencyRTL}
+            onOpenConnectionModal={() => setIsConnectionModalOpen(true)}
           />
         )}
 
@@ -214,6 +219,13 @@ export const App: React.FC = () => {
       <MissionHistoryModal
         isOpen={historyOpen}
         onClose={() => setHistoryOpen(false)}
+      />
+
+      {/* Primary Hardware, Wireless Link & ESP32 / Pixhawk Connection Modal */}
+      <HardwareConnectionModal
+        isOpen={isConnectionModalOpen}
+        onClose={() => setIsConnectionModalOpen(false)}
+        pixhawkState={pixhawkState}
       />
     </div>
   );

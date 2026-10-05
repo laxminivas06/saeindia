@@ -30,6 +30,7 @@ interface FlightControllerCardProps {
   onStartMission: () => void;
   onStopAbortMission: () => void;
   onEmergencyRTL: () => void;
+  onOpenConnectionModal?: () => void;
   className?: string;
 }
 
@@ -43,6 +44,7 @@ export const FlightControllerCard: React.FC<FlightControllerCardProps> = ({
   onStartMission,
   onStopAbortMission,
   onEmergencyRTL,
+  onOpenConnectionModal,
   className = ''
 }) => {
   const [isArming, setIsArming] = useState<boolean>(false);
@@ -147,14 +149,18 @@ export const FlightControllerCard: React.FC<FlightControllerCardProps> = ({
             </span>
           </div>
 
-          <span className={`px-2 py-0.5 rounded text-[11px] font-extrabold flex items-center space-x-1.5 border ${
-            isConnected
-              ? 'bg-emerald-950/80 border-emerald-400 text-emerald-300'
-              : 'bg-rose-950/80 border-rose-400 text-rose-300'
-          }`}>
+          <button
+            onClick={onOpenConnectionModal}
+            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center space-x-1.5 border transition cursor-pointer ${
+              isConnected
+                ? 'bg-emerald-950/80 border-emerald-400 text-emerald-300 hover:bg-emerald-900/60'
+                : 'bg-rose-950/80 border-rose-400 text-rose-300 hover:bg-rose-900/60 animate-pulse'
+            }`}
+            title="Click to open Hardware Connection Dialog (ESP32, Pixhawk & Phone GPS)"
+          >
             <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`} />
-            <span>{isConnected ? '● Connected' : '○ Disconnected'}</span>
-          </span>
+            <span>{isConnected ? '● Connected' : '⚡ Connect Hardware'}</span>
+          </button>
         </div>
       </div>
 

@@ -37,6 +37,7 @@ interface HeaderProps {
   runnerLink: RunnerLinkState;
   onSwitchRole: () => void;
   onOpenHistory: () => void;
+  onOpenConnectionModal?: () => void;
   onResetMission?: () => void;
 }
 
@@ -48,6 +49,7 @@ export const Header: React.FC<HeaderProps> = ({
   runnerLink,
   onSwitchRole,
   onOpenHistory,
+  onOpenConnectionModal,
   onResetMission
 }) => {
   const [muted, setMuted] = React.useState(audioService.getMuted());
@@ -167,28 +169,32 @@ export const Header: React.FC<HeaderProps> = ({
       {/* Center: Realtime Field Status Badges */}
       <div className="hidden md:flex items-center space-x-2.5 font-mono text-[11px]">
         {/* MAVLink / Pixhawk */}
-        <div className={`flex items-center space-x-1.5 px-2 py-1 rounded border ${
+        <div 
+          onClick={onOpenConnectionModal}
+          title="Flight Controller MAVLink Status. Click to configure connection."
+          className={`flex items-center space-x-1.5 px-2 py-1 rounded border cursor-pointer transition hover:scale-105 ${
           pixhawkState.isConnected 
-            ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-400' 
-            : 'bg-rose-950/40 border-rose-500/30 text-rose-400 animate-pulse'
+            ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-400 hover:border-emerald-500/60' 
+            : 'bg-rose-950/40 border-rose-500/30 text-rose-400 animate-pulse hover:border-rose-500/60'
         }`}>
           <Radio className="w-3 h-3" />
           <span>MAVLink: {pixhawkState.isConnected ? 'LOCKED ✓' : 'DISCONNECTED'}</span>
         </div>
 
         {/* ESP32 WebSocket Bridge Status */}
-        {pixhawkState.connectionType === 'ESP32_WEBSOCKET' && (
-          <div className={`flex items-center space-x-1.5 px-2 py-1 rounded border ${
-            pixhawkState.isUsbConnected
-              ? 'bg-purple-950/40 border-purple-500/30 text-purple-300'
-              : pixhawkState.esp32LinkState === 'CONNECTING' || pixhawkState.esp32LinkState === 'RECONNECTING'
-              ? 'bg-amber-950/40 border-amber-500/30 text-amber-300 animate-pulse'
-              : 'bg-slate-800 border-slate-700 text-slate-400'
-          }`}>
-            <Wifi className="w-3 h-3 text-purple-400" />
-            <span>ESP32: {pixhawkState.isUsbConnected ? 'CONNECTED ✓' : pixhawkState.esp32LinkState === 'CONNECTING' ? 'CONNECTING' : pixhawkState.esp32LinkState === 'RECONNECTING' ? 'RECONNECTING' : 'DISCONNECTED'}</span>
-          </div>
-        )}
+        <div 
+          onClick={onOpenConnectionModal}
+          title="ESP32 Wireless Bridge Link. Click to configure connection."
+          className={`flex items-center space-x-1.5 px-2 py-1 rounded border cursor-pointer transition hover:scale-105 ${
+          pixhawkState.isUsbConnected
+            ? 'bg-purple-950/40 border-purple-500/30 text-purple-300 hover:border-purple-500/60'
+            : pixhawkState.esp32LinkState === 'CONNECTING' || pixhawkState.esp32LinkState === 'RECONNECTING'
+            ? 'bg-amber-950/40 border-amber-500/30 text-amber-300 animate-pulse hover:border-amber-500/60'
+            : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'
+        }`}>
+          <Wifi className="w-3 h-3 text-purple-400" />
+          <span>ESP32: {pixhawkState.isUsbConnected ? 'CONNECTED ✓' : pixhawkState.esp32LinkState === 'CONNECTING' ? 'CONNECTING' : pixhawkState.esp32LinkState === 'RECONNECTING' ? 'RECONNECTING' : 'DISCONNECTED'}</span>
+        </div>
 
         {/* GPS */}
         {(() => {
@@ -240,6 +246,30 @@ export const Header: React.FC<HeaderProps> = ({
 
       {/* Right: Quick Action Buttons & Theme Controller */}
       <div className="flex items-center space-x-1.5 sm:space-x-2">
+        {/* Prominent Responsive Connect / Hardware Link Button */}
+        {onOpenConnectionModal && (
+          <button
+            onClick={onOpenConnectionModal}
+            className={`flex items-center space-x-1 sm:space-x-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg border font-mono text-[11px] sm:text-xs font-bold transition shadow-md cursor-pointer ${
+              pixhawkState.isConnected
+                ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-300 hover:bg-emerald-900/60 shadow-emerald-950/30'
+                : pixhawkState.esp32LinkState === 'CONNECTING' || pixhawkState.esp32LinkState === 'RECONNECTING'
+                ? 'bg-amber-950/80 border-amber-500/50 text-amber-300 hover:bg-amber-900/60 animate-pulse shadow-amber-950/30'
+                : 'bg-rose-950/80 border-rose-500/60 text-rose-300 hover:bg-rose-900/80 animate-pulse shadow-rose-950/50'
+            }`}
+            title="Open Hardware Connection Manager (ESP32, Pixhawk & Phone GPS)"
+          >
+            <Wifi className={`w-3.5 h-3.5 ${pixhawkState.isConnected ? 'text-emerald-400' : 'text-rose-400'}`} />
+            <span>
+              {pixhawkState.isConnected
+                ? 'LINKED ✓'
+                : pixhawkState.esp32LinkState === 'CONNECTING'
+                ? 'LINKING...'
+                : 'CONNECT'}
+            </span>
+          </button>
+        )}
+
         {/* App-Wide Theme Controller */}
         <ThemeController />
 

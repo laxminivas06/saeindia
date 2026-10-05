@@ -46,6 +46,7 @@ interface GroundStationDashboardProps {
   onSetHomePoint: (coords?: { lat: number; lng: number }) => void;
   onStartMission: () => void;
   onEmergencyRTL: () => void;
+  onOpenConnectionModal?: () => void;
   onSwitchToManual?: () => void;
 }
 
@@ -62,6 +63,7 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
   onSetHomePoint,
   onStartMission,
   onEmergencyRTL,
+  onOpenConnectionModal,
   onSwitchToManual
 }) => {
   // State
@@ -206,7 +208,10 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
       {/* 0. INDEPENDENT CONNECTION STATUS BAR (Requirement 12)       */}
       {/* Decoupled: GS, Phone GPS, ESP32, Pixhawk, IP Camera status   */}
       {/* ============================================================ */}
-      <IndependentConnectionStatusBar pixhawkState={pixhawkState} />
+      <IndependentConnectionStatusBar 
+        pixhawkState={pixhawkState} 
+        onOpenConnectionModal={onOpenConnectionModal}
+      />
 
       {/* ============================================================ */}
       {/* 1. OPERATIONS BAR: IP Camera -> Scanner -> Status -> Timer  */}
@@ -297,6 +302,7 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
             onStartMission={handleStartMissionClick}
             onStopAbortMission={handleStopAbortMissionClick}
             onEmergencyRTL={onEmergencyRTL}
+            onOpenConnectionModal={onOpenConnectionModal}
           />
         </div>
       </div>

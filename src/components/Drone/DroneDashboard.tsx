@@ -65,6 +65,7 @@ interface DroneDashboardProps {
   runnerAckLatencyMs?: number;
   onQRDetected: (data: DecodedQRData) => void;
   onEmergencyRTL: () => void;
+  onOpenConnectionModal?: () => void;
 }
 
 export const DroneDashboard: React.FC<DroneDashboardProps> = ({
@@ -78,7 +79,8 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
   runnerAckReceived,
   runnerAckLatencyMs,
   onQRDetected,
-  onEmergencyRTL
+  onEmergencyRTL,
+  onOpenConnectionModal
 }) => {
   const [preArmError, setPreArmError] = useState<string | null>(null);
 
@@ -308,16 +310,28 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
       <div className="bg-slate-900/95 border border-slate-800 rounded-2xl p-3 sm:p-4 shadow-2xl">
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-9 gap-2 text-xs">
           {/* DRONE */}
-          <div className="bg-slate-950/80 p-2 rounded-xl border border-slate-800 flex items-center justify-between">
+          <div 
+            onClick={onOpenConnectionModal}
+            title="Drone Link Status. Click to connect or configure hardware."
+            className={`bg-slate-950/80 p-2 rounded-xl border border-slate-800 flex items-center justify-between cursor-pointer transition hover:border-sky-500/50 ${
+              !pixhawkState.isConnected ? 'hover:bg-rose-950/30' : 'hover:bg-emerald-950/30'
+            }`}
+          >
             <span className="text-[10px] text-slate-400 font-bold uppercase">DRONE</span>
             <span className={`text-[10px] font-black flex items-center space-x-1 ${pixhawkState.isConnected ? 'text-emerald-400' : 'text-rose-400'}`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${pixhawkState.isConnected ? 'bg-emerald-400' : 'bg-rose-400'}`} />
-              <span>{pixhawkState.isConnected ? 'CONNECTED' : 'OFFLINE'}</span>
+              <span className={`w-1.5 h-1.5 rounded-full ${pixhawkState.isConnected ? 'bg-emerald-400' : 'bg-rose-400 animate-pulse'}`} />
+              <span>{pixhawkState.isConnected ? 'CONNECTED' : 'CONNECT ⚡'}</span>
             </span>
           </div>
 
           {/* MAVLink */}
-          <div className="bg-slate-950/80 p-2 rounded-xl border border-slate-800 flex items-center justify-between">
+          <div 
+            onClick={onOpenConnectionModal}
+            title="MAVLink Telemetry Stream. Click to connect or configure hardware."
+            className={`bg-slate-950/80 p-2 rounded-xl border border-slate-800 flex items-center justify-between cursor-pointer transition hover:border-sky-500/50 ${
+              !pixhawkState.isReceivingTelemetry ? 'hover:bg-amber-950/30' : 'hover:bg-emerald-950/30'
+            }`}
+          >
             <span className="text-[10px] text-slate-400 font-bold uppercase">MAVLink</span>
             <span className={`text-[10px] font-black flex items-center space-x-1 ${pixhawkState.isReceivingTelemetry ? 'text-emerald-400' : 'text-amber-400'}`}>
               <span className={`w-1.5 h-1.5 rounded-full ${pixhawkState.isReceivingTelemetry ? 'bg-emerald-400' : 'bg-amber-400'}`} />

@@ -313,10 +313,10 @@ setInterval(() => {
   }
 }, 25000);
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`=======================================================`);
   console.log(`🚀 SAE INDIA SECURE WEBSOCKET RELAY RUNNING`);
-  console.log(`📡 Port:               ${PORT}`);
+  console.log(`📡 Port:               ${PORT} (0.0.0.0)`);
   console.log(`🔒 Token Auth:         ${RELAY_TOKEN ? 'ENABLED' : 'DISABLED'}`);
   console.log(`🌐 Browser Endpoint:   /ws (e.g. wss://YOUR-DOMAIN/ws?token=...)`);
   console.log(`🔌 Connector Endpoint: /connector`);

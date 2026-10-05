@@ -32,8 +32,8 @@ export interface Esp32WebSocketOptions {
 
 // Environment defaults
 const ENV_ESP32_WS_URL = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_ESP32_WS_URL) || 'ws://192.168.31.194:8080/ws';
-const ENV_SECURE_RELAY_URL = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SECURE_RELAY_URL) || '';
-const ENV_RELAY_TOKEN = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_RELAY_TOKEN) || 'saeindia_secret_token_2026';
+const ENV_SECURE_RELAY_URL = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SECURE_RELAY_URL) || 'wss://saeindia-szj0.onrender.com/ws';
+const ENV_RELAY_TOKEN = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_RELAY_TOKEN) || 'saeindia_sec_99348a7b1c0e';
 
 function parseWsEndpoint(urlStr: string) {
   try {
@@ -155,7 +155,12 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
         if (savedPort) this.localPort = parseInt(savedPort, 10) || 8080;
         if (savedPath !== null && savedPath !== undefined) this.path = savedPath;
         if (savedSecureEndpoint && savedSecureEndpoint.trim().length > 0) {
-          this.secureEndpoint = savedSecureEndpoint.trim();
+          if (savedSecureEndpoint.includes('saeindia-relay.onrender.com')) {
+            this.secureEndpoint = ENV_SECURE_RELAY_URL;
+            localStorage.setItem('esp32_secure_endpoint', ENV_SECURE_RELAY_URL);
+          } else {
+            this.secureEndpoint = savedSecureEndpoint.trim();
+          }
         }
         if (savedToken && savedToken.trim().length > 0) {
           this.relayToken = savedToken.trim();
