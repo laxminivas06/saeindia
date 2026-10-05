@@ -645,26 +645,39 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
               </div>
 
               <div className="flex items-center space-x-2">
-                {/* Direct link to ESP32 Webpage for Wi-Fi and setup */}
-                <a
-                  href={`http://${esp32Host}/`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-[11px] px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-purple-300 hover:text-purple-100 rounded-lg border border-purple-500/40 flex items-center space-x-1 cursor-pointer transition font-bold"
-                  title="Open ESP32 Configuration Webpage"
-                >
-                  <ExternalLink className="w-3.5 h-3.5 text-purple-400" />
-                  <span>ESP32 Webpage</span>
-                </a>
+                {isHttpsOrigin ? (
+                  <button
+                    onClick={handleCheckCloudHealth}
+                    disabled={isCheckingCloudHealth}
+                    className="text-[11px] px-2.5 py-1 bg-emerald-950/80 hover:bg-emerald-900/80 text-emerald-300 rounded-lg border border-emerald-500/40 flex items-center space-x-1 cursor-pointer transition font-bold"
+                    title="Check Render Cloud Relay Health (HTTPS)"
+                  >
+                    {isCheckingCloudHealth ? <Loader2 className="w-3 h-3 animate-spin" /> : <Activity className="w-3 h-3 text-emerald-400" />}
+                    <span>Check Cloud Relay</span>
+                  </button>
+                ) : (
+                  <>
+                    <a
+                      href={`http://${esp32Host}/`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[11px] px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-purple-300 hover:text-purple-100 rounded-lg border border-purple-500/40 flex items-center space-x-1 cursor-pointer transition font-bold"
+                      title="Open ESP32 Configuration Webpage"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5 text-purple-400" />
+                      <span>ESP32 Webpage</span>
+                    </a>
 
-                <button
-                  onClick={handleCheckEsp32}
-                  disabled={isCheckingEsp32}
-                  className="text-[11px] px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 flex items-center space-x-1 cursor-pointer transition"
-                >
-                  {isCheckingEsp32 ? <Loader2 className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3" />}
-                  <span>Check Ping</span>
-                </button>
+                    <button
+                      onClick={handleCheckEsp32}
+                      disabled={isCheckingEsp32}
+                      className="text-[11px] px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 flex items-center space-x-1 cursor-pointer transition"
+                    >
+                      {isCheckingEsp32 ? <Loader2 className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3" />}
+                      <span>Check Ping</span>
+                    </button>
+                  </>
+                )}
 
                 <button
                   onClick={() => setShowEsp32Guide(true)}
