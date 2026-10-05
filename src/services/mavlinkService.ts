@@ -126,8 +126,8 @@ class MAVLinkService {
   };
 
   private telemetry: DroneTelemetry = {
-    latitude: 12.9715987,
-    longitude: 77.5945627,
+    latitude: 0.0,
+    longitude: 0.0,
     altitude: 0.0,
     targetAltitude: 0.0,
     groundSpeed: 0.0,
@@ -136,9 +136,10 @@ class MAVLinkService {
     batteryPercent: 0,
     batteryVoltage: 0.0,
     batteryCurrent: 0.0,
+    batteryCellCount: 3,
     gps: {
-      latitude: 12.9715987,
-      longitude: 77.5945627,
+      latitude: 0.0,
+      longitude: 0.0,
       altitude: 0.0,
       satellites: 0,
       hdop: 99.0,
@@ -155,12 +156,18 @@ class MAVLinkService {
   };
 
   private homePoint: HomePoint = {
-    latitude: 12.9715987,
-    longitude: 77.5945627,
+    latitude: 0.0,
+    longitude: 0.0,
     altitude: 0.0,
     timestamp: 0,
     isSet: false
   };
+
+  private pendingMissionItems: Array<{ lat: number; lon: number; alt: number; command?: number }> = [];
+  // Ground Elevation & Relative Altitude Tracking (AGL vs AMSL)
+  private groundElevationMsl: number = 0;
+  private hasCalibratedGroundElevation: boolean = false;
+  private lastGlobalPosIntAltTime: number = 0;
 
   // MAVLink Parser Buffers
   private rxBuffer: Uint8Array = new Uint8Array(4096);
@@ -486,7 +493,7 @@ class MAVLinkService {
   public async setHomePoint(lat?: number, lon?: number, alt?: number): Promise<HomePoint> {
     const validLat = (lat !== undefined && Math.abs(lat) > 0.0001) ? lat : (this.telemetry.latitude || this.telemetry.gps.latitude);
     const validLon = (lon !== undefined && Math.abs(lon) > 0.0001) ? lon : (this.telemetry.longitude || this.telemetry.gps.longitude);
-    const validAlt = (alt !== undefined) ? alt : (this.telemetry.gps.altitude || this.telemetry.altitude);
+    const validAlt = (alt !== undefined) ? alt : (this.telemetry.gps.altitude || this.groundElevationMsl || this.telemetry.altitude);
 
     // Command MAV_CMD_DO_SET_HOME (179)
     // param1 = 1.0: use current vehicle position; 0.0: use explicit coords in param5, 6, 7
@@ -513,12 +520,54 @@ class MAVLinkService {
       isSet: true
     };
 
+    this.groundElevationMsl = validAlt;
+    this.hasCalibratedGroundElevation = true;
+
+    // Reset relative altitude to 0.0m AGL if vehicle is on ground disarmed
+    if (!this.telemetry.isArmed) {
+      this.telemetry.altitude = 0.0;
+    }
+
     this.telemetry.distanceToHome = 0;
     this.notifyTelemetry();
     this.notifyConnection();
-    this.logDiagnostic('SYSTEM', `Home Point Locked: ${validLat.toFixed(6)}, ${validLon.toFixed(6)} (Alt: ${validAlt.toFixed(1)}m)`, 'success');
+    this.logDiagnostic('SYSTEM', `Home Point Locked: ${validLat.toFixed(6)}, ${validLon.toFixed(6)} (Alt: ${validAlt.toFixed(1)}m MSL)`, 'success');
     this.addStatusMessage('INFO', 6, `Home Point Locked: ${validLat.toFixed(6)}, ${validLon.toFixed(6)}`);
     return this.homePoint;
+  }
+
+  public clearHomePoint(): void {
+    this.homePoint = {
+      latitude: 0,
+      longitude: 0,
+      altitude: 0,
+      timestamp: 0,
+      isSet: false
+    };
+    this.telemetry.distanceToHome = 0;
+    this.notifyTelemetry();
+    this.notifyConnection();
+    this.logDiagnostic('SYSTEM', 'Home Point Cleared by Operator', 'info');
+    this.addStatusMessage('INFO', 6, 'Home Point Cleared');
+  }
+
+  /**
+   * Calibrate ground altitude baseline (AGL zero datum).
+   * Zeroes the relative altitude on the ground based on current MSL barometer/GPS reading.
+   */
+  public calibrateGroundAltitude(): void {
+    const currentMsl = this.telemetry.gps.altitude || (this.homePoint.isSet ? this.homePoint.altitude : 0) || this.groundElevationMsl;
+    if (currentMsl > 0) {
+      this.groundElevationMsl = currentMsl;
+      this.hasCalibratedGroundElevation = true;
+    }
+    if (this.homePoint.isSet && this.groundElevationMsl > 0) {
+      this.homePoint.altitude = this.groundElevationMsl;
+    }
+    this.telemetry.altitude = 0.0;
+    this.notifyTelemetry();
+    this.addStatusMessage('NOTICE', 5, `Ground altitude zeroed (Datum: ${this.groundElevationMsl.toFixed(1)}m MSL).`);
+    this.logDiagnostic('SYSTEM', `Ground altitude calibrated to 0.0m AGL (Base MSL: ${this.groundElevationMsl.toFixed(1)}m)`, 'success');
   }
 
   private addStatusMessage(severity: PixhawkStatusMessage['severity'], severityLevel: number, text: string) {
@@ -767,6 +816,12 @@ class MAVLinkService {
     this.telemetry.pixhawkConnected = false;
     this.telemetry.isArmed = false;
     this.telemetry.flightMode = 'DISARMED';
+    this.telemetry.altitude = 0.0;
+
+    // Reset Ground Elevation and Relative Altitude tracking
+    this.groundElevationMsl = 0;
+    this.hasCalibratedGroundElevation = false;
+    this.lastGlobalPosIntAltTime = 0;
 
     this.logDiagnostic('TRANSPORT', 'MAVLink connection completely cleaned up & disconnected.', 'info');
     this.notifyConnection();
@@ -996,10 +1051,20 @@ class MAVLinkService {
             const voltageV = +(voltageMv / 1000).toFixed(2);
             this.telemetry.batteryVoltage = voltageV;
             this.telemetry.batteryCurrent = +Math.max(0, currentA).toFixed(2);
+
+            // Dynamically detect or refine cell count (default 3S for this drone)
+            if (voltageV > 20.0) {
+              this.telemetry.batteryCellCount = 6;
+            } else if (voltageV > 13.2) {
+              this.telemetry.batteryCellCount = 4;
+            } else {
+              this.telemetry.batteryCellCount = 3;
+            }
+
             if (batteryRemaining >= 0 && batteryRemaining <= 100) {
               this.telemetry.batteryPercent = batteryRemaining;
             } else if (voltageV > 0) {
-              this.telemetry.batteryPercent = this.calculateLiPoPercentage(voltageV);
+              this.telemetry.batteryPercent = this.calculateLiPoPercentage(voltageV, this.telemetry.batteryCellCount);
             }
           }
           this.notifyTelemetry();
@@ -1024,8 +1089,28 @@ class MAVLinkService {
           if (Number.isFinite(heading) && heading >= 0) {
             this.telemetry.heading = heading;
           }
-          if (Number.isFinite(alt) && alt >= 0) {
-            this.telemetry.altitude = +alt.toFixed(2);
+          if (Number.isFinite(alt)) {
+            // VFR_HUD alt is AMSL (Mean Sea Level), typically ~450m-500m inland.
+            // Calibrate ground elevation baseline when vehicle is disarmed on ground.
+            if (!this.telemetry.isArmed && (!this.hasCalibratedGroundElevation || this.groundElevationMsl === 0) && alt > 0) {
+              this.groundElevationMsl = +alt.toFixed(2);
+              this.hasCalibratedGroundElevation = true;
+            }
+
+            const groundRef = (this.homePoint.isSet && this.homePoint.altitude > 0)
+              ? this.homePoint.altitude
+              : this.groundElevationMsl;
+
+            // Only fallback to VFR_HUD if GLOBAL_POSITION_INT (authoritative EKF relative_alt) is stale (>1500ms)
+            const hasRecentGlobalPos = (now - this.lastGlobalPosIntAltTime) < 1500;
+            if (!hasRecentGlobalPos) {
+              if (groundRef > 0) {
+                const relAlt = Math.max(0, alt - groundRef);
+                this.telemetry.altitude = (!this.telemetry.isArmed && relAlt < 1.0) ? 0.0 : +relAlt.toFixed(2);
+              } else if (!this.telemetry.isArmed) {
+                this.telemetry.altitude = 0.0;
+              }
+            }
           }
           this.notifyTelemetry();
         }
@@ -1038,14 +1123,22 @@ class MAVLinkService {
         // 10..29 voltages[10] (uint16 mV), 30..31 current_battery (int16 10*mA), 35 battery_remaining
         if (payload.length >= 12) {
           let totalVolts = 0;
+          let activeCells = 0;
           for (let c = 0; c < 10; c++) {
             const cellOffset = 10 + c * 2;
             if (cellOffset + 2 <= payload.length) {
               const cellMv = view.getUint16(cellOffset, true);
               if (cellMv > 0 && cellMv < 65000) {
                 totalVolts += cellMv / 1000;
+                activeCells++;
               }
             }
+          }
+
+          if (activeCells > 0) {
+            this.telemetry.batteryCellCount = activeCells;
+          } else if (totalVolts > 0) {
+            this.telemetry.batteryCellCount = totalVolts > 20.0 ? 6 : totalVolts > 13.2 ? 4 : 3;
           }
 
           if (totalVolts > 0) {
@@ -1064,12 +1157,39 @@ class MAVLinkService {
             if (batteryRemaining >= 0 && batteryRemaining <= 100) {
               this.telemetry.batteryPercent = batteryRemaining;
             } else if (this.telemetry.batteryVoltage > 0) {
-              this.telemetry.batteryPercent = this.calculateLiPoPercentage(this.telemetry.batteryVoltage);
+              this.telemetry.batteryPercent = this.calculateLiPoPercentage(this.telemetry.batteryVoltage, this.telemetry.batteryCellCount);
             }
           } else if (this.telemetry.batteryVoltage > 0) {
-            this.telemetry.batteryPercent = this.calculateLiPoPercentage(this.telemetry.batteryVoltage);
+            this.telemetry.batteryPercent = this.calculateLiPoPercentage(this.telemetry.batteryVoltage, this.telemetry.batteryCellCount);
           }
           this.notifyTelemetry();
+        }
+        break;
+      }
+
+      // MISSION_REQUEST (msgId = 40) & MISSION_REQUEST_INT (msgId = 51)
+      case 40:
+      case 51: {
+        if (payload.length >= 2) {
+          const requestedSeq = view.getUint16(0, true);
+          if (this.pendingMissionItems && requestedSeq < this.pendingMissionItems.length) {
+            const item = this.pendingMissionItems[requestedSeq];
+            this.sendMissionItemInt(requestedSeq, item);
+          }
+        }
+        break;
+      }
+
+      // MISSION_ACK (msgId = 47)
+      case 47: {
+        if (payload.length >= 3) {
+          const ackType = view.getUint8(2);
+          if (ackType === 0) {
+            this.logDiagnostic('MAVLINK', '[MISSION_ACK RX] Pixhawk accepted mission waypoints ✓', 'success');
+            this.addStatusMessage('NOTICE', 5, 'Mission stored in Pixhawk');
+          } else {
+            this.logDiagnostic('MAVLINK', `[MISSION_ACK RX] Mission ACK code: ${ackType}`, 'warn');
+          }
         }
         break;
       }
@@ -1121,8 +1241,13 @@ class MAVLinkService {
             this.telemetry.gps.longitude = lon;
             this.telemetry.gps.altitude = alt;
 
+            if (!this.telemetry.isArmed && (!this.hasCalibratedGroundElevation || this.groundElevationMsl === 0) && alt > 0) {
+              this.groundElevationMsl = alt;
+              this.hasCalibratedGroundElevation = true;
+            }
+
             // Auto-seed initial Home if disarmed on ground and home is not yet set
-            if (!this.homePoint.isSet && !this.telemetry.isArmed && this.telemetry.altitude <= 1.5) {
+            if (!this.homePoint.isSet && !this.telemetry.isArmed) {
               this.homePoint = {
                 latitude: lat,
                 longitude: lon,
@@ -1130,6 +1255,9 @@ class MAVLinkService {
                 timestamp: now,
                 isSet: true
               };
+              this.groundElevationMsl = alt;
+              this.hasCalibratedGroundElevation = true;
+              this.telemetry.altitude = 0.0;
             }
           }
           this.notifyTelemetry();
@@ -1142,7 +1270,8 @@ class MAVLinkService {
         if (payload.length >= 28) {
           const lat = view.getInt32(4, true) / 1e7;
           const lon = view.getInt32(8, true) / 1e7;
-          const relativeAlt = view.getInt32(16, true) / 1000;
+          const mslAlt = view.getInt32(12, true) / 1000;
+          const rawRelAlt = view.getInt32(16, true) / 1000;
           const vx = view.getInt16(20, true) / 100;
           const vy = view.getInt16(22, true) / 100;
           const vz = view.getInt16(24, true) / 100;
@@ -1159,7 +1288,31 @@ class MAVLinkService {
               }
             }
           }
-          this.telemetry.altitude = +Math.max(0, relativeAlt).toFixed(2);
+
+          if (!this.telemetry.isArmed && (!this.hasCalibratedGroundElevation || this.groundElevationMsl === 0) && mslAlt > 0) {
+            this.groundElevationMsl = +mslAlt.toFixed(2);
+            this.hasCalibratedGroundElevation = true;
+          }
+
+          const groundRef = (this.homePoint.isSet && this.homePoint.altitude > 0)
+            ? this.homePoint.altitude
+            : this.groundElevationMsl;
+
+          let computedRelAlt = rawRelAlt;
+          // Guard: If autopilot firmware sent raw MSL in relative_alt (common before Home lock)
+          if (Math.abs(rawRelAlt - mslAlt) < 5 && rawRelAlt > 50 && groundRef > 0) {
+            computedRelAlt = Math.max(0, mslAlt - groundRef);
+          }
+
+          // When disarmed on the ground, clamp small sensor variations strictly to 0.0m AGL
+          if (!this.telemetry.isArmed && computedRelAlt <= 1.0) {
+            computedRelAlt = 0.0;
+          } else {
+            computedRelAlt = Math.max(0, computedRelAlt);
+          }
+
+          this.telemetry.altitude = +computedRelAlt.toFixed(2);
+          this.lastGlobalPosIntAltTime = now;
           this.telemetry.groundSpeed = +Math.hypot(vx, vy).toFixed(2);
           this.telemetry.verticalSpeed = +(-vz).toFixed(2);
           this.telemetry.heading = +hdg.toFixed(0);
@@ -1189,6 +1342,11 @@ class MAVLinkService {
               timestamp: now,
               isSet: true
             };
+            this.groundElevationMsl = alt;
+            this.hasCalibratedGroundElevation = true;
+            if (!this.telemetry.isArmed) {
+              this.telemetry.altitude = 0.0;
+            }
             if (this.telemetry.latitude !== 0 && this.telemetry.longitude !== 0) {
               const dy = (this.telemetry.latitude - this.homePoint.latitude) * 111320;
               const dx = (this.telemetry.longitude - this.homePoint.longitude) * 111320 * Math.cos((this.homePoint.latitude * Math.PI) / 180);
@@ -1376,14 +1534,27 @@ class MAVLinkService {
   private lastStreamRequestTime = 0;
   public async requestMavlinkDataStreams() {
     const now = Date.now();
-    if (now - this.lastStreamRequestTime < 4000) return; // Throttled: at most once every 4s
+    if (now - this.lastStreamRequestTime < 2500) return; // Throttled: at most once every 2.5s
     this.lastStreamRequestTime = now;
 
-    // 0: ALL, 2: EXTENDED_STATUS (SYS_STATUS & Battery), 6: POSITION, 11: EXTRA2 (VFR_HUD)
+    // 1. Legacy MAVLink 1 stream requests (0: ALL, 2: EXTENDED_STATUS, 6: POSITION, 11: EXTRA2)
     await this.sendRequestDataStream(0 /* ALL */, 4 /* 4 Hz */);
-    await this.sendRequestDataStream(2 /* EXTENDED_STATUS */, 4 /* 4 Hz */);
-    await this.sendRequestDataStream(6 /* POSITION */, 4 /* 4 Hz */);
-    await this.sendRequestDataStream(11 /* EXTRA2 / VFR_HUD */, 4 /* 4 Hz */);
+    await this.sendRequestDataStream(2 /* EXTENDED_STATUS: SYS_STATUS & BATTERY_STATUS */, 4 /* 4 Hz */);
+    await this.sendRequestDataStream(6 /* POSITION */, 5 /* 5 Hz */);
+    await this.sendRequestDataStream(11 /* EXTRA2: VFR_HUD */, 4 /* 4 Hz */);
+
+    // 2. Modern MAVLink 2 command: MAV_CMD_SET_MESSAGE_INTERVAL (cmd 511)
+    // Param 1 = message ID, Param 2 = interval in microseconds
+    try {
+      await this.sendMavlinkCommandLong(511, 1 /* SYS_STATUS: battery voltage/current/percentage */, 250000 /* 4 Hz */);
+      await this.sendMavlinkCommandLong(511, 147 /* BATTERY_STATUS: multi-cell voltages */, 500000 /* 2 Hz */);
+      await this.sendMavlinkCommandLong(511, 74 /* VFR_HUD: altitude, airspeed, heading */, 250000 /* 4 Hz */);
+      await this.sendMavlinkCommandLong(511, 33 /* GLOBAL_POSITION_INT */, 200000 /* 5 Hz */);
+      await this.sendMavlinkCommandLong(511, 30 /* ATTITUDE */, 100000 /* 10 Hz */);
+      await this.sendMavlinkCommandLong(511, 24 /* GPS_RAW_INT */, 200000 /* 5 Hz */);
+    } catch (e) {
+      console.warn('Failed to send MAV_CMD_SET_MESSAGE_INTERVAL', e);
+    }
   }
   public async sendArmCommand(force: boolean = false): Promise<boolean> {
     console.log('[ARM] BUTTON CLICKED');
@@ -1673,8 +1844,8 @@ class MAVLinkService {
     }
     if (this.connectionState.isRealHardware || isConnected) {
       await this.setFlightMode('GUIDED');
-      // MAV_CMD_DO_REPOSITION (192): param1 = ground speed, param2 = flags, param5 = lat, param6 = lon, param7 = alt
-      return await this.sendMavlinkCommandLong(192 /* MAV_CMD_DO_REPOSITION */, groundSpeedMps, 0, 0, 0, lat, lon, alt);
+      // MAV_CMD_DO_REPOSITION (192): param1 = ground speed, param2 = flags (1 = MAV_DO_REPOSITION_FLAGS_CHANGE_MODE), param5 = lat, param6 = lon, param7 = alt
+      return await this.sendMavlinkCommandLong(192 /* MAV_CMD_DO_REPOSITION */, groundSpeedMps, 1, 0, 0, lat, lon, alt);
     } else {
       return true;
     }
@@ -1683,6 +1854,7 @@ class MAVLinkService {
   /**
    * Controlled Mid-Flight Altitude Update:
    * Changes the target cruising altitude safely via MAV_CMD_DO_CHANGE_ALTITUDE (186)
+   * Frame 3 = MAV_FRAME_GLOBAL_RELATIVE_ALT (relative to home/ground elevation, NOT AMSL)
    */
   public async setTargetAltitude(targetAltMeters: number): Promise<boolean> {
     const isConnected = this.connectionState.isConnected || this.connectionState.isUsbConnected;
@@ -1690,8 +1862,8 @@ class MAVLinkService {
     this.addStatusMessage('NOTICE', 5, `Updating Target Altitude to ${targetAltMeters}m...`);
 
     if (this.connectionState.isRealHardware || isConnected) {
-      // MAV_CMD_DO_CHANGE_ALTITUDE (186): param1 = Target altitude, param2 = Frame (0 = global/default)
-      await this.sendMavlinkCommandLong(186 /* MAV_CMD_DO_CHANGE_ALTITUDE */, targetAltMeters, 0, 0, 0, 0, 0, 0);
+      // MAV_CMD_DO_CHANGE_ALTITUDE (186): param1 = Target altitude, param2 = Frame (3 = MAV_FRAME_GLOBAL_RELATIVE_ALT)
+      await this.sendMavlinkCommandLong(186 /* MAV_CMD_DO_CHANGE_ALTITUDE */, targetAltMeters, 3 /* MAV_FRAME_GLOBAL_RELATIVE_ALT */, 0, 0, 0, 0, 0);
       this.notifyTelemetry();
       return true;
     } else {
@@ -1791,6 +1963,71 @@ class MAVLinkService {
     }
     this.addStatusMessage('INFO', 6, `Manual Directional Control: ${direction}`);
     return true;
+  }
+
+  /**
+   * Upload autonomous mission waypoints to Pixhawk flight controller via MAVLink mission protocol
+   * (MISSION_COUNT -> MISSION_REQUEST/MISSION_REQUEST_INT -> MISSION_ITEM_INT -> MISSION_ACK)
+   */
+  public async uploadMissionWaypoints(
+    items: Array<{ lat: number; lon: number; alt: number; command?: number }>
+  ): Promise<boolean> {
+    const isConnected = this.connectionState.isConnected || this.connectionState.isUsbConnected;
+    if (!isConnected && !this.simInterval) {
+      this.logDiagnostic('ERROR', 'Cannot upload mission: MAVLink link not connected', 'error');
+      return false;
+    }
+
+    this.pendingMissionItems = items;
+    this.addStatusMessage('NOTICE', 5, `Uploading ${items.length} waypoints to Pixhawk FC...`);
+
+    if (this.connectionState.isRealHardware || isConnected) {
+      // 1. Send MISSION_COUNT (msgId 44)
+      const payload = new Uint8Array(4);
+      const view = new DataView(payload.buffer);
+      view.setUint16(0, items.length, true);
+      view.setUint8(2, this.connectionState.systemId || 1);
+      view.setUint8(3, this.connectionState.componentId || 1);
+
+      const packet = this.buildMavlink1Frame(44 /* MISSION_COUNT */, payload);
+      await usbHostService.sendBytes(packet);
+      this.connectionState.bytesSent += packet.length;
+      this.logDiagnostic('MAVLINK', `[MISSION_COUNT TX] Announced ${items.length} waypoints to Pixhawk`, 'info');
+      return true;
+    } else {
+      this.logDiagnostic('MAVLINK', `[SIMULATOR] Stored ${items.length} mission waypoints`, 'info');
+      return true;
+    }
+  }
+
+  public async sendMissionItemInt(
+    seq: number,
+    item: { lat: number; lon: number; alt: number; command?: number }
+  ): Promise<boolean> {
+    const payload = new Uint8Array(37);
+    const view = new DataView(payload.buffer);
+    view.setFloat32(0, 0, true); // param1: hold time
+    view.setFloat32(4, 2.0, true); // param2: accept radius (2m)
+    view.setFloat32(8, 0, true); // param3: pass radius
+    view.setFloat32(12, 0, true); // param4: yaw
+    view.setInt32(16, Math.round(item.lat * 1e7), true);
+    view.setInt32(20, Math.round(item.lon * 1e7), true);
+    view.setFloat32(24, item.alt, true);
+    view.setUint16(28, seq, true);
+    view.setUint16(30, item.command || 16 /* MAV_CMD_NAV_WAYPOINT */, true);
+    view.setUint8(32, this.connectionState.systemId || 1);
+    view.setUint8(33, this.connectionState.componentId || 1);
+    view.setUint8(34, 3 /* MAV_FRAME_GLOBAL_RELATIVE_ALT */);
+    view.setUint8(35, seq === 0 ? 1 : 0);
+    view.setUint8(36, 1); // autocontinue
+
+    const packet = this.buildMavlink1Frame(73 /* MISSION_ITEM_INT */, payload);
+    const success = await usbHostService.sendBytes(packet);
+    if (success) {
+      this.connectionState.bytesSent += packet.length;
+      this.logDiagnostic('MAVLINK', `[MISSION_ITEM_INT TX] Sent waypoint ${seq + 1}/${this.pendingMissionItems?.length || 1} (${item.lat.toFixed(6)}, ${item.lon.toFixed(6)}, ${item.alt}m)`, 'info');
+    }
+    return success;
   }
 
   private async sendMavlinkCommandLong(
@@ -1905,8 +2142,10 @@ class MAVLinkService {
       45: 232, // MISSION_CLEAR_ALL
       46: 11,  // MISSION_ITEM_REACHED
       47: 153, // MISSION_ACK
+      51: 196, // MISSION_REQUEST_INT
       62: 183, // NAV_CONTROLLER_OUTPUT
       66: 148, // REQUEST_DATA_STREAM
+      73: 38,  // MISSION_ITEM_INT
       76: 152, // COMMAND_LONG
       77: 143, // COMMAND_ACK
       124: 87, // GPS2_RAW
@@ -1943,8 +2182,9 @@ class MAVLinkService {
     this.telemetry.gps.satellites = 14;
     this.telemetry.gps.hdop = 0.8;
     this.telemetry.gps.fixType = '3D_FIX';
-    this.telemetry.batteryVoltage = 16.2;
-    this.telemetry.batteryPercent = 95;
+    this.telemetry.batteryVoltage = 12.6; // 3S LiPo fully charged
+    this.telemetry.batteryPercent = 100;
+    this.telemetry.batteryCellCount = 3;
 
     this.startSimulationTelemetryLoop();
     this.logDiagnostic('SYSTEM', 'Switched to Benchmark Software-in-the-Loop Simulator mode', 'info');
@@ -2008,18 +2248,39 @@ class MAVLinkService {
     this.currentWpIndex = 0;
   }
 
-  private calculateLiPoPercentage(voltage: number): number {
-    const is4S = voltage > 13.0 && voltage < 17.5;
-    const is3S = voltage > 9.0 && voltage <= 13.0;
-    const is6S = voltage > 20.0;
+  private calculateLiPoPercentage(voltage: number, cellCount?: number): number {
+    let cells = cellCount;
+    if (!cells || cells <= 0) {
+      if (voltage > 20.0) cells = 6;
+      else if (voltage > 13.2) cells = 4;
+      else cells = 3; // Default 3S LiPo for this drone
+    }
 
-    let cellVolt = voltage / 4.0;
-    if (is3S) cellVolt = voltage / 3.0;
-    else if (is6S) cellVolt = voltage / 6.0;
+    const cellVolt = voltage / cells;
 
-    if (cellVolt >= 4.2) return 100;
-    if (cellVolt <= 3.3) return 0;
-    return Math.round(((cellVolt - 3.3) / (4.2 - 3.3)) * 100);
+    // Standard calibrated non-linear LiPo discharge curve per cell:
+    // 4.20V: 100%
+    // 4.05V: 90%
+    // 3.90V: 70%
+    // 3.82V: 50% (nominal storage)
+    // 3.75V: 25%
+    // 3.70V: 15% (low battery warning threshold)
+    // 3.50V: 5% (critical failsafe threshold)
+    // 3.30V: 0% (empty / cut-off)
+    if (cellVolt >= 4.20) return 100;
+    if (cellVolt <= 3.30) return 0;
+
+    if (cellVolt >= 4.05) {
+      return Math.round(90 + ((cellVolt - 4.05) / 0.15) * 10);
+    } else if (cellVolt >= 3.82) {
+      return Math.round(50 + ((cellVolt - 3.82) / 0.23) * 40);
+    } else if (cellVolt >= 3.70) {
+      return Math.round(15 + ((cellVolt - 3.70) / 0.12) * 35);
+    } else if (cellVolt >= 3.50) {
+      return Math.round(5 + ((cellVolt - 3.50) / 0.20) * 10);
+    } else {
+      return Math.round(((cellVolt - 3.30) / 0.20) * 5);
+    }
   }
 
   private emitPacket(msgName: MAVLinkPacket['msgName'], payload: Record<string, any>) {

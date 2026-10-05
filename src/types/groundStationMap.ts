@@ -4,7 +4,11 @@ export type MapLayerType = 'street' | 'satellite' | 'topo' | 'dark';
 
 export type MissionDrawingTool = 'select' | 'point' | 'path' | 'polygon' | 'circle' | 'set_home';
 
-export type MissionType = 'WAYPOINTS' | 'PATH' | 'POLYGON_GRID' | 'CIRCLE' | 'SEARCH';
+export type MissionType = 'WAYPOINTS' | 'PATH' | 'POLYGON_GRID' | 'CIRCLE' | 'SEARCH' | 'CUSTOM_ROUTE';
+
+export type ReturnBehavior = 'DIRECT_RTL' | 'SAME_PATH_BACK' | 'CUSTOM_RETURN_PATH' | 'LAND_AT_HOME';
+
+export type MissionCategory = 'CUSTOM_ROUTE' | 'GRID_SEARCH' | 'CIRCLE_INVESTIGATION' | 'TARGET_MISSION';
 
 export interface GroundStationWaypoint {
   id: string;
@@ -16,6 +20,9 @@ export interface GroundStationWaypoint {
   action?: 'TAKEOFF' | 'NAVIGATE' | 'LOITER' | 'SURVEY_PASS' | 'ORBIT' | 'RTL' | 'LAND';
   name?: string;
   distanceFromPreviousMeters?: number;
+  isCompleted?: boolean;
+  isActive?: boolean;
+  leg?: 'OUTBOUND' | 'RETURN';
 }
 
 export interface GroundStationMission {
@@ -27,9 +34,15 @@ export interface GroundStationMission {
     isSet: boolean;
   };
   missionType: MissionType;
+  missionCategory?: MissionCategory;
   altitude: number; // Planned mission cruise altitude (meters)
   speed: number;    // Planned mission speed (m/s)
   waypoints: GroundStationWaypoint[];
+  outboundWaypoints?: GroundStationWaypoint[];
+  returnWaypoints?: GroundStationWaypoint[];
+  returnBehavior?: ReturnBehavior;
+  currentWaypointIndex?: number;
+  currentLeg?: 'OUTBOUND' | 'TARGET_HOVER' | 'RETURN';
   totalDistance: number;          // Total route distance in meters
   estimatedDuration: number;      // Total estimated duration in seconds
   geometry?: {
@@ -38,6 +51,7 @@ export interface GroundStationMission {
     circleCenter?: LatLngPoint;
     circleRadiusMeters?: number;
     areaSquareMeters?: number;
+    returnCoordinates?: LatLngPoint[];
   };
   isUploaded: boolean;
   createdAt: number;

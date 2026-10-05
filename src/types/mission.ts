@@ -42,6 +42,13 @@ export type MissionState =
   | 'GPS_ERROR'
   | 'CAMERA_ERROR'
   | 'BOUNDARY_ERROR'
+  | 'PLANNING'
+  | 'MISSION_VALIDATED'
+  | 'OUTBOUND_NAVIGATION'
+  | 'TARGET_INVESTIGATION'
+  | 'OUTBOUND_COMPLETE'
+  | 'RETURN_NAVIGATION'
+  | 'HOME_REACHED'
   | 'LOW_BATTERY'
   | 'MANUAL_CONTROL';
 
@@ -133,6 +140,7 @@ export interface DroneTelemetry {
   batteryPercent: number;
   batteryVoltage: number;
   batteryCurrent?: number;
+  batteryCellCount?: number;
   flightMode: string;
   isArmed: boolean;
   vehicleState?: 'ARMED' | 'DISARMED' | 'ARMING' | 'DISARMING' | 'UNKNOWN';

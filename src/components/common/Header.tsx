@@ -19,10 +19,15 @@ import {
   Smartphone,
   Info,
   X,
-  Wifi
+  Wifi,
+  Map,
+  ExternalLink,
+  Plane
 } from 'lucide-react';
 import { audioService } from '../../services/audioService';
 import { ThemeController } from './ThemeController';
+import { authService } from '../../services/authService';
+import { mavlinkService } from '../../services/mavlinkService';
 
 interface HeaderProps {
   currentRole: AppRole;
@@ -83,7 +88,7 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header className="bg-slate-900/90 border-b border-slate-800 backdrop-blur-md px-3 sm:px-5 py-2.5 flex items-center justify-between text-xs sm:text-sm select-none z-30 sticky top-0">
+    <header className="bg-slate-900/98 border-b border-slate-800 backdrop-blur-md px-3 sm:px-5 py-2.5 flex items-center justify-between text-xs sm:text-sm select-none z-50 sticky top-0 shadow-lg shadow-black/40">
       {/* Left: Branding & Role */}
       <div className="flex items-center space-x-2 sm:space-x-3">
         <button
@@ -116,10 +121,51 @@ export const Header: React.FC<HeaderProps> = ({
             {getRoleLabel()}
           </span>
         </div>
+        {/* Quick Mode Switcher (Google Maps vs Drone Ops) */}
+        <div className="flex items-center space-x-1 bg-slate-950/80 p-0.5 rounded-lg border border-slate-800">
+          <button
+            type="button"
+            onClick={() => authService.switchRole('GROUND_STATION')}
+            className={`px-2 py-1 rounded text-[10px] font-mono font-bold flex items-center space-x-1 cursor-pointer transition ${
+              currentRole === 'GROUND_STATION'
+                ? 'bg-sky-600 text-white shadow-sm'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+            title="Switch to Ground Station with Interactive Google Maps & Mission Workspace"
+          >
+            <Map className="w-3 h-3 text-sky-300" />
+            <span>GOOGLE MAPS</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => authService.switchRole('DRONE')}
+            className={`px-2 py-1 rounded text-[10px] font-mono font-bold flex items-center space-x-1 cursor-pointer transition ${
+              currentRole === 'DRONE'
+                ? 'bg-amber-600 text-white shadow-sm'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+            title="Switch to Drone Onboard Avionics & Subsystems"
+          >
+            <Plane className="w-3 h-3 text-amber-300" />
+            <span>DRONE OPS</span>
+          </button>
+
+          <a
+            href="/googlemaps.html"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-2 py-1 rounded text-[10px] font-mono font-bold flex items-center space-x-1 text-emerald-400 hover:text-emerald-300 hover:bg-slate-800 transition"
+            title="Open Nivas's Standalone Google Maps Boundary Admin Tool"
+          >
+            <ExternalLink className="w-3 h-3" />
+            <span className="hidden xl:inline">BOUNDARY HTML</span>
+          </a>
+        </div>
       </div>
 
       {/* Center: Realtime Field Status Badges */}
-      <div className="hidden md:flex items-center space-x-3 font-mono text-[11px]">
+      <div className="hidden md:flex items-center space-x-2.5 font-mono text-[11px]">
         {/* MAVLink / Pixhawk */}
         <div className={`flex items-center space-x-1.5 px-2 py-1 rounded border ${
           pixhawkState.isConnected 
@@ -156,19 +202,29 @@ export const Header: React.FC<HeaderProps> = ({
                 : 'bg-amber-950/40 border-amber-500/30 text-amber-400'
             }`}>
               <Satellite className="w-3 h-3" />
-              <span>{isGpsReady ? 'GPS READY' : 'GPS NO LOCK'} | Satellites: {telemetry.gps.satellites} / 7 | Fix: {fixLabel}</span>
+              <span>{isGpsReady ? 'GPS READY' : 'GPS NO LOCK'} | Sat: {telemetry.gps.satellites} | {fixLabel}</span>
             </div>
           );
         })()}
 
-        {/* Battery */}
-        <div className={`flex items-center space-x-1.5 px-2 py-1 rounded border ${
-          telemetry.batteryPercent > 30 
-            ? 'bg-slate-800/80 border-slate-700 text-slate-200' 
-            : 'bg-rose-950/50 border-rose-500/40 text-rose-400'
-        }`}>
-          <Battery className="w-3.5 h-3.5 text-emerald-400" />
-          <span className="font-bold">{telemetry.batteryPercent}% ({telemetry.batteryVoltage}V)</span>
+        {/* Battery Telemetry Badge (Clickable to probe flight controller) */}
+        <div 
+          onClick={() => mavlinkService.requestMavlinkDataStreams()}
+          title="Telemetry Battery Monitor. Click to probe flight controller telemetry stream."
+          className={`flex items-center space-x-1.5 px-2 py-1 rounded border cursor-pointer transition select-none ${
+            telemetry.batteryVoltage > 0
+              ? (telemetry.batteryPercent > 30 
+                  ? 'bg-slate-800/80 border-slate-700 text-slate-200 hover:border-slate-600' 
+                  : 'bg-rose-950/50 border-rose-500/40 text-rose-400 animate-pulse')
+              : 'bg-amber-950/40 border-amber-500/40 text-amber-300 hover:bg-amber-900/50'
+          }`}
+        >
+          <Battery className={`w-3.5 h-3.5 ${telemetry.batteryVoltage > 0 ? 'text-emerald-400' : 'text-amber-400'}`} />
+          <span className="font-bold">
+            {telemetry.batteryVoltage > 0 
+              ? `${telemetry.batteryPercent}% (${telemetry.batteryVoltage.toFixed(1)}V • ${telemetry.batteryCellCount || 3}S)` 
+              : 'BATTERY: NO SIGNAL (POLL)'}
+          </span>
         </div>
 
         {/* Runner Wireless Link */}
@@ -178,7 +234,7 @@ export const Header: React.FC<HeaderProps> = ({
             : 'bg-slate-800 border-slate-700 text-slate-400'
         }`}>
           <Activity className="w-3 h-3" />
-          <span>Runner Link: {runnerLink.isConnected ? `${runnerLink.signalStrengthDbm} dBm` : 'WAITING'}</span>
+          <span>Runner: {runnerLink.isConnected ? `${runnerLink.signalStrengthDbm} dBm` : 'WAITING'}</span>
         </div>
       </div>
 

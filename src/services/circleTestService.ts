@@ -43,12 +43,16 @@ class CircleTestService {
   private listeners: Set<CircleStateListener> = new Set();
   private telemetryUnsub: (() => void) | null = null;
   private orbitTicker: any = null;
+  private waypointsTicker: any = null;
   private armingWatchdog: any = null;
   private climbWatchdog: any = null;
   private transitWatchdog: any = null;
   private descentWatchdog: any = null;
   private centerRef: { lat: number; lon: number; alt: number } | null = null;
   private perimeterRef: { lat: number; lon: number } | null = null;
+  private circleWaypoints: Array<{ lat: number; lon: number; alt: number; angleDeg: number }> = [];
+  private currentWpIdx: number = 0;
+  private currentWpStartTime: number = 0;
   private startOrbitAngle: number = 0;
   private totalDegreesTraveled: number = 0;
   private simOrbitInterval: any = null;
@@ -177,6 +181,82 @@ class CircleTestService {
   /**
    * Validate safety prerequisites before allowing autonomous circle test
    */
+  /**
+   * Strict coordinate validator: guarantees valid, non-zero, finite, real-world GPS coordinates
+   */
+  public isValidCoordinate(lat?: number | null, lon?: number | null): boolean {
+    if (lat === null || lat === undefined || lon === null || lon === undefined) return false;
+    if (typeof lat !== 'number' || typeof lon !== 'number') return false;
+    if (isNaN(lat) || isNaN(lon) || !isFinite(lat) || !isFinite(lon)) return false;
+    if (lat === 0 && lon === 0) return false;
+    if (Math.abs(lat) < 0.0001 || Math.abs(lon) < 0.0001) return false;
+    if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return false;
+    return true;
+  }
+
+  /**
+   * Geodesic distance calculation between two GPS coordinates using WGS-84 projection (in meters)
+   */
+  public calculateDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+    const earthRadius = 6378137.0;
+    const dLat = ((lat2 - lat1) * Math.PI) / 180.0;
+    const dLon = ((lon2 - lon1) * Math.PI) / 180.0;
+    const meanLat = ((lat1 + lat2) / 2.0) * (Math.PI / 180.0);
+    const y = dLat * earthRadius;
+    const x = dLon * earthRadius * Math.cos(meanLat);
+    return Math.hypot(x, y);
+  }
+
+  /**
+   * Generates GPS circular waypoints around a valid center reference point.
+   * Uses proper Earth local-coordinate conversion (WGS-84 tangent plane)
+   * radius = diameter / 2
+   * angle = 2π * i / numberOfPoints
+   */
+  public generateCircleWaypoints(
+    centerLat: number,
+    centerLon: number,
+    diameterMeters: number,
+    altitudeMeters: number,
+    numberOfPoints: number = 16,
+    direction: 'CW' | 'CCW' = 'CW'
+  ): Array<{ lat: number; lon: number; alt: number; angleDeg: number }> {
+    const radius = diameterMeters / 2.0;
+    const earthRadius = 6378137.0; // WGS-84 equatorial radius in meters
+    const waypoints: Array<{ lat: number; lon: number; alt: number; angleDeg: number }> = [];
+
+    const radLat = (centerLat * Math.PI) / 180.0;
+    const cosLat = Math.cos(radLat);
+
+    for (let i = 0; i < numberOfPoints; i++) {
+      const fraction = i / numberOfPoints;
+      const angleRad = (direction === 'CW' ? 1 : -1) * 2.0 * Math.PI * fraction;
+      const angleDeg = (fraction * 360.0) % 360.0;
+
+      // Local tangent plane offsets in meters:
+      // dx: East offset (+East, -West)
+      // dy: North offset (+North, -South)
+      const dxMeters = radius * Math.sin(angleRad);
+      const dyMeters = radius * Math.cos(angleRad);
+
+      // Geodesic coordinate conversion:
+      const dLat = (dyMeters / earthRadius) * (180.0 / Math.PI);
+      const dLon = (dxMeters / (earthRadius * cosLat)) * (180.0 / Math.PI);
+
+      waypoints.push({
+        lat: +(centerLat + dLat).toFixed(7),
+        lon: +(centerLon + dLon).toFixed(7),
+        alt: altitudeMeters,
+        angleDeg: Math.round(angleDeg)
+      });
+    }
+
+    return waypoints;
+  }
+
+  /**
+   * Validate safety prerequisites before allowing autonomous circle test
+   */
   public validatePrerequisites(
     telemetry: DroneTelemetry,
     pixhawkState: PixhawkConnectionState,
@@ -187,14 +267,23 @@ class CircleTestService {
 
     // GPS requirements for safe autonomous navigation
     const satCount = telemetry.gps.satellites || 0;
-    const is3DFix = telemetry.gps.fixType === '3D_FIX' || telemetry.gps.fixType === 'DGPS' || telemetry.gps.fixType === 'RTK_FIXED' || telemetry.gps.fixType === 'RTK_FLOAT';
-    const gpsLocked = Boolean(telemetry.gps.isLocked || is3DFix || satCount >= 6);
+    const is3DFix =
+      telemetry.gps.fixType === '3D_FIX' ||
+      telemetry.gps.fixType === 'DGPS' ||
+      telemetry.gps.fixType === 'RTK_FIXED' ||
+      telemetry.gps.fixType === 'RTK_FLOAT';
     const hdop = telemetry.gps.hdop || 99;
-    const gpsAdequate = gpsLocked && (hdop <= 3.5 || hdop === 0 || satCount >= 7);
+    const gpsLocked = Boolean(telemetry.gps.isLocked || is3DFix);
+    const gpsAdequate = gpsLocked && is3DFix && satCount >= 6 && (hdop <= 3.5 || hdop === 0);
 
-    // Home / Takeoff coordinate anchor
-    const hasPosition = (telemetry.latitude !== 0 && telemetry.longitude !== 0) || (telemetry.gps.latitude !== 0 && telemetry.gps.longitude !== 0);
-    const homeValid = Boolean(homePoint.isSet || hasPosition);
+    // Validate Home position & GPS coordinates strictly (no 0,0, no null/undefined, no stale coordinates)
+    const isHomeValid = Boolean(homePoint.isSet && this.isValidCoordinate(homePoint.latitude, homePoint.longitude));
+    const isCurrentGpsValid = Boolean(
+      is3DFix &&
+      this.isValidCoordinate(telemetry.latitude, telemetry.longitude) &&
+      this.isValidCoordinate(telemetry.gps.latitude, telemetry.gps.longitude)
+    );
+    const hasValidCenter = isHomeValid || isCurrentGpsValid;
 
     // Vehicle ground state
     const onGround = telemetry.altitude <= 1.5 && !telemetry.isArmed;
@@ -220,18 +309,18 @@ class CircleTestService {
         label: 'GPS 3D Fix & Satellites (Required for Orbit)',
         passed: gpsAdequate,
         reason: gpsAdequate
-          ? `GPS READY: ${satCount} / 7 Sats (Fix: ${(telemetry.gps.fixType || '3D_FIX').replace('_', ' ')}, HDOP ${hdop.toFixed(1)})`
-          : `GPS Inadequate (Sats: ${satCount}/7, Fix: ${telemetry.gps.fixType || 'NO_FIX'})`
+          ? `GPS READY: ${satCount} Sats (Fix: ${(telemetry.gps.fixType || '3D_FIX').replace('_', ' ')}, HDOP ${hdop.toFixed(1)})`
+          : `GPS Inadequate (Sats: ${satCount}/6, Fix: ${telemetry.gps.fixType || 'NO_FIX'})`
       },
       {
         id: 'home_position',
-        label: 'Takeoff Reference Locked (Orbit Center)',
-        passed: homeValid,
-        reason: homePoint.isSet
-          ? `Center Locked: ${homePoint.latitude.toFixed(5)}, ${homePoint.longitude.toFixed(5)}`
-          : hasPosition
-          ? `Auto-Set Center Ready (${(telemetry.latitude || telemetry.gps.latitude).toFixed(5)}, ${(telemetry.longitude || telemetry.gps.longitude).toFixed(5)})`
-          : 'Awaiting initial GPS coordinates for orbit center anchor.'
+        label: 'Home Position / GPS Anchor (Orbit Center)',
+        passed: hasValidCenter,
+        reason: isHomeValid
+          ? `Home Reference Locked: ${homePoint.latitude.toFixed(6)}, ${homePoint.longitude.toFixed(6)}`
+          : isCurrentGpsValid
+          ? `GPS Position Locked: ${telemetry.latitude.toFixed(6)}, ${telemetry.longitude.toFixed(6)}`
+          : 'Valid Home/GPS position required for Circle Test'
       },
       {
         id: 'vehicle_state',
@@ -256,7 +345,7 @@ class CircleTestService {
   }
 
   /**
-   * Execute the AUTONOMOUS_CIRCLE_TEST sequence
+   * Execute the AUTONOMOUS_CIRCLE_TEST sequence using real GPS circular waypoints
    */
   public async executeMission(
     telemetry: DroneTelemetry,
@@ -274,13 +363,41 @@ class CircleTestService {
       return { success: false, error: val.blockingReason || 'Prerequisites check failed.' };
     }
 
-    // Determine Center Anchor coordinate (takeoff position)
-    const centerLat = homePoint.isSet ? homePoint.latitude : (telemetry.latitude || telemetry.gps.latitude);
-    const centerLon = homePoint.isSet ? homePoint.longitude : (telemetry.longitude || telemetry.gps.longitude);
-    const centerAlt = homePoint.isSet ? homePoint.altitude : (telemetry.gps.altitude || telemetry.altitude);
+    const is3DFix =
+      telemetry.gps.fixType === '3D_FIX' ||
+      telemetry.gps.fixType === 'DGPS' ||
+      telemetry.gps.fixType === 'RTK_FIXED' ||
+      telemetry.gps.fixType === 'RTK_FLOAT';
 
-    if (centerLat === 0 && centerLon === 0) {
-      return { success: false, error: 'Cannot start circle test: No valid GPS coordinates for takeoff center anchor.' };
+    // Strict coordinate validation: retrieve valid Home or live GPS anchor
+    let centerLat: number | null = null;
+    let centerLon: number | null = null;
+    let centerAlt: number = 0;
+
+    if (homePoint.isSet && this.isValidCoordinate(homePoint.latitude, homePoint.longitude)) {
+      centerLat = homePoint.latitude;
+      centerLon = homePoint.longitude;
+      centerAlt = homePoint.altitude || telemetry.altitude || 0;
+    } else if (
+      is3DFix &&
+      this.isValidCoordinate(telemetry.latitude, telemetry.longitude)
+    ) {
+      centerLat = telemetry.latitude;
+      centerLon = telemetry.longitude;
+      centerAlt = telemetry.gps.altitude || telemetry.altitude || 0;
+    }
+
+    // Fail safe: If no valid real-world coordinates, abort immediately (do NOT use (0,0) or fallback)
+    if (
+      centerLat === null ||
+      centerLon === null ||
+      !this.isValidCoordinate(centerLat, centerLon)
+    ) {
+      audioService.playBeep(300, 300, 'sawtooth');
+      return {
+        success: false,
+        error: 'Valid Home/GPS position required for Circle Test'
+      };
     }
 
     this.centerRef = { lat: centerLat, lon: centerLon, alt: centerAlt };
@@ -294,22 +411,42 @@ class CircleTestService {
       }
     }
 
-    // Calculate initial perimeter waypoint (North of center: angle 0)
-    const radiusMeters = this.config.circleDiameterMeters / 2;
-    const latOffset = radiusMeters / 111320;
-    this.perimeterRef = {
-      lat: centerLat + latOffset,
-      lon: centerLon
-    };
+    const radiusMeters = this.config.circleDiameterMeters / 2.0;
+    const targetAlt = this.config.targetAltitudeMeters;
+    const numberOfPoints = 16;
+
+    // Generate 16 GPS circle waypoints using geodesic Earth projection around Home
+    const waypoints = this.generateCircleWaypoints(
+      centerLat,
+      centerLon,
+      this.config.circleDiameterMeters,
+      targetAlt,
+      numberOfPoints,
+      this.config.direction
+    );
+    this.circleWaypoints = waypoints;
+    this.currentWpIdx = 0;
+
+    // Upload MAVLink mission containing takeoff, circular perimeter waypoints, return to center, and land
+    try {
+      const missionPayload = [
+        { lat: centerLat, lon: centerLon, alt: targetAlt, command: 22 /* MAV_CMD_NAV_TAKEOFF */ },
+        ...waypoints.map((wp) => ({ lat: wp.lat, lon: wp.lon, alt: wp.alt, command: 16 /* MAV_CMD_NAV_WAYPOINT */ })),
+        { lat: centerLat, lon: centerLon, alt: targetAlt, command: 16 /* MAV_CMD_NAV_WAYPOINT */ },
+        { lat: centerLat, lon: centerLon, alt: 0, command: 21 /* MAV_CMD_NAV_LAND */ }
+      ];
+      await mavlinkService.uploadMissionWaypoints(missionPayload);
+    } catch (e) {
+      console.warn('[CIRCLE_TEST] MAVLink mission upload notice:', e);
+    }
 
     this.clearAllTimers();
     this.totalDegreesTraveled = 0;
     this.startOrbitAngle = 0;
 
-    const targetAlt = this.config.targetAltitudeMeters;
     this.state = {
       step: 'ARMING',
-      stepMessage: `[1/6] Arming Pixhawk FC in GUIDED mode (Target Alt: ${targetAlt}m, Diameter: ${this.config.circleDiameterMeters}m)...`,
+      stepMessage: `[1/6] Arming Pixhawk FC in GUIDED mode (Target Alt: ${targetAlt}m, Diameter: ${this.config.circleDiameterMeters}m, ${numberOfPoints} waypoints)...`,
       isExecuting: true,
       currentAltitude: telemetry.altitude,
       targetAltitude: targetAlt,
@@ -352,7 +489,7 @@ class CircleTestService {
       }
     }, 8000);
 
-    // Bind telemetry stream watcher for climb, perimeter transit, orbit, return, and landing
+    // Bind telemetry stream watcher for climb, orbit navigation, return, and landing
     this.bindTelemetryWatch();
 
     // If already armed on ground, immediately climb
@@ -400,11 +537,11 @@ class CircleTestService {
         this.initiateClimb();
       }
 
-      // 2. Altitude Reached -> Transit to Circle Perimeter
+      // 2. Altitude Reached -> Start Circle Waypoints Orbit
       if (this.state.step === 'TAKEOFF_CLIMB') {
         if (telem.altitude >= (this.config.targetAltitudeMeters - this.config.altitudeTolerance)) {
           if (this.climbWatchdog) clearTimeout(this.climbWatchdog);
-          this.transitToPerimeter();
+          this.startCircularOrbit();
         }
       }
 
@@ -428,92 +565,98 @@ class CircleTestService {
     });
   }
 
-  private async transitToPerimeter(): Promise<void> {
-    if (!this.centerRef || !this.perimeterRef) return;
-
-    this.state.step = 'TRANSIT_TO_PERIMETER';
-    const radius = this.state.circleRadiusMeters;
-    const alt = this.config.targetAltitudeMeters;
-    this.state.stepMessage = `[3/6] Target ${alt}m reached. Repositioning outward to circle perimeter (Radius: ${radius}m)...`;
-    this.notifyState();
-
-    audioService.playBeep(988, 120);
-
-    // Fly outward to the perimeter waypoint
-    await mavlinkService.flyToPosition(
-      this.perimeterRef.lat,
-      this.perimeterRef.lon,
-      alt,
-      this.config.flightSpeedMps
-    );
-
-    // Transit timer: allow vehicle to reach perimeter before commencing 360 orbit
-    // Distance = radius; at speed V m/s, time ~ (radius / speed) + 3s
-    const transitTimeMs = Math.max(4000, Math.min(20000, Math.round((radius / this.config.flightSpeedMps) * 1000) + 3000));
-
-    if (this.transitWatchdog) clearTimeout(this.transitWatchdog);
-    this.transitWatchdog = setTimeout(() => {
-      if (this.state.step === 'TRANSIT_TO_PERIMETER') {
-        this.startCircularOrbit();
-      }
-    }, transitTimeMs);
-  }
-
+  /**
+   * Executes the circular flight by guiding the drone sequentially through
+   * the 16 geodesic GPS waypoints using Pixhawk's onboard position controller.
+   */
   private async startCircularOrbit(): Promise<void> {
-    if (!this.centerRef) return;
+    if (!this.centerRef || this.circleWaypoints.length === 0) return;
 
     this.state.step = 'ORBITING';
     const radius = this.state.circleRadiusMeters;
     const speed = this.config.flightSpeedMps;
-    const dirSign = this.config.direction === 'CW' ? 1 : -1;
     const alt = this.config.targetAltitudeMeters;
+    const totalWaypoints = this.circleWaypoints.length;
 
-    this.state.stepMessage = `[4/6] Executing Autonomous Orbit: Diameter ${this.config.circleDiameterMeters}m (Radius: ${radius}m) at ${speed}m/s [${this.config.direction}]...`;
+    this.state.stepMessage = `[4/6] Executing Circle Flight: Diameter ${this.config.circleDiameterMeters}m (Radius: ${radius}m) at ${speed}m/s [${this.config.direction}]...`;
     this.notifyState();
 
     audioService.playBeep(1046, 150);
 
-    // Send MAVLink MAV_CMD_DO_ORBIT (425) to Pixhawk FC
-    await mavlinkService.commandOrbit(
-      radius * dirSign,
-      speed,
-      this.centerRef.lat,
-      this.centerRef.lon,
-      alt
-    );
+    this.currentWpIdx = 0;
+    this.currentWpStartTime = Date.now();
 
-    // Circumference = 2 * PI * R. Orbit duration per lap = (2 * PI * R) / speed
-    const lapDurationSec = Math.max(8, (2 * Math.PI * radius) / speed);
-    const totalOrbitTimeSec = lapDurationSec * this.config.laps;
+    // Command the first circle waypoint to Pixhawk position controller
+    const initialWp = this.circleWaypoints[0];
+    await mavlinkService.flyToPosition(initialWp.lat, initialWp.lon, alt, speed);
 
-    let elapsedOrbitSec = 0;
-    if (this.orbitTicker) clearInterval(this.orbitTicker);
+    // Calculate arc distance between consecutive circle waypoints: (2 * PI * R) / totalWaypoints
+    const arcLengthMeters = (2 * Math.PI * radius) / totalWaypoints;
+    const estimatedTimePerWpSec = Math.max(2.0, arcLengthMeters / speed);
+    const maxTimeoutPerWpMs = Math.round((estimatedTimePerWpSec + 4.0) * 1000);
 
-    this.orbitTicker = setInterval(() => {
+    if (this.waypointsTicker) clearInterval(this.waypointsTicker);
+
+    this.waypointsTicker = setInterval(async () => {
       if (this.state.step !== 'ORBITING') {
-        clearInterval(this.orbitTicker);
+        clearInterval(this.waypointsTicker);
         return;
       }
 
-      elapsedOrbitSec += 0.5;
-      this.state.elapsedSeconds = Math.round(elapsedOrbitSec);
-
-      // Angle swept
-      const fraction = Math.min(1.0, elapsedOrbitSec / totalOrbitTimeSec);
-      const totalDegrees = fraction * (360 * this.config.laps);
-      this.state.currentAngleDeg = Math.round(totalDegrees % 360);
-      this.state.currentLap = Math.min(this.config.laps, Math.floor(totalDegrees / 360) + 1);
-      this.state.progressPercent = Math.round(fraction * 100);
-
-      this.state.stepMessage = `[4/6] Autonomous Orbit active: Lap ${this.state.currentLap}/${this.config.laps} (${Math.round(this.state.currentAngleDeg)}° / 360°) — D: ${this.config.circleDiameterMeters}m, Alt: ${this.state.currentAltitude.toFixed(1)}m.`;
-      this.notifyState();
-
-      // Check for orbit completion
-      if (elapsedOrbitSec >= totalOrbitTimeSec) {
-        clearInterval(this.orbitTicker);
+      const telem = mavlinkService.getTelemetry();
+      const currentTarget = this.circleWaypoints[this.currentWpIdx];
+      if (!currentTarget) {
+        clearInterval(this.waypointsTicker);
         this.returnToCenterTakeoffPoint();
+        return;
       }
-    }, 500);
+
+      // Check distance from current drone GPS to active circle waypoint
+      const dist = this.calculateDistanceMeters(
+        telem.latitude,
+        telem.longitude,
+        currentTarget.lat,
+        currentTarget.lon
+      );
+
+      const elapsedOnWpMs = Date.now() - this.currentWpStartTime;
+      const waypointReached = dist <= 2.2 || elapsedOnWpMs >= maxTimeoutPerWpMs;
+
+      if (waypointReached) {
+        this.currentWpIdx++;
+        this.currentWpStartTime = Date.now();
+
+        // Check if lap or all laps complete
+        if (this.currentWpIdx >= totalWaypoints) {
+          if (this.state.currentLap < this.config.laps) {
+            this.state.currentLap++;
+            this.currentWpIdx = 0;
+            const nextWp = this.circleWaypoints[0];
+            await mavlinkService.flyToPosition(nextWp.lat, nextWp.lon, alt, speed);
+          } else {
+            // All laps finished!
+            clearInterval(this.waypointsTicker);
+            this.returnToCenterTakeoffPoint();
+            return;
+          }
+        } else {
+          // Progress to next waypoint along circle
+          const nextWp = this.circleWaypoints[this.currentWpIdx];
+          await mavlinkService.flyToPosition(nextWp.lat, nextWp.lon, alt, speed);
+        }
+      }
+
+      // Update progress metrics
+      const activeWp = this.circleWaypoints[Math.min(this.currentWpIdx, totalWaypoints - 1)];
+      const totalPoints = totalWaypoints * this.config.laps;
+      const completedPoints = (this.state.currentLap - 1) * totalWaypoints + this.currentWpIdx;
+      const progress = Math.min(99, Math.round((completedPoints / totalPoints) * 100));
+
+      this.state.currentAngleDeg = activeWp.angleDeg;
+      this.state.progressPercent = progress;
+      this.state.stepMessage = `[4/6] Flying Circle Waypoint ${this.currentWpIdx + 1}/${totalWaypoints} (${activeWp.angleDeg}°) — Lap ${this.state.currentLap}/${this.config.laps}, D: ${this.config.circleDiameterMeters}m, Alt: ${telem.altitude.toFixed(1)}m.`;
+      this.notifyState();
+    }, 400);
   }
 
   private async returnToCenterTakeoffPoint(): Promise<void> {
@@ -521,7 +664,7 @@ class CircleTestService {
 
     this.state.step = 'RETURNING_TO_CENTER';
     const alt = this.config.targetAltitudeMeters;
-    this.state.stepMessage = `[5/6] ${this.config.laps} lap(s) orbit complete! Repositioning back to center takeoff point...`;
+    this.state.stepMessage = `[5/6] ${this.config.laps} lap(s) complete! Repositioning back to Home position (${this.centerRef.lat.toFixed(5)}, ${this.centerRef.lon.toFixed(5)})...`;
     this.notifyState();
 
     audioService.playBeep(784, 150);
@@ -534,19 +677,27 @@ class CircleTestService {
       this.config.flightSpeedMps
     );
 
-    // Allow 4-8 seconds for return transit before commanding landing
-    const returnTimeMs = Math.max(4000, Math.min(15000, Math.round((this.state.circleRadiusMeters / this.config.flightSpeedMps) * 1000) + 2000));
+    const returnTimeoutMs = Math.max(4000, Math.min(15000, Math.round((this.state.circleRadiusMeters / this.config.flightSpeedMps) * 1000) + 2500));
+    const returnStartTime = Date.now();
 
-    setTimeout(() => {
-      if (this.state.step === 'RETURNING_TO_CENTER') {
+    const returnInterval = setInterval(() => {
+      if (this.state.step !== 'RETURNING_TO_CENTER') {
+        clearInterval(returnInterval);
+        return;
+      }
+      const telem = mavlinkService.getTelemetry();
+      const dist = this.calculateDistanceMeters(telem.latitude, telem.longitude, this.centerRef!.lat, this.centerRef!.lon);
+      const elapsed = Date.now() - returnStartTime;
+      if (dist <= 1.8 || elapsed >= returnTimeoutMs) {
+        clearInterval(returnInterval);
         this.beginDescentAndLand();
       }
-    }, returnTimeMs);
+    }, 300);
   }
 
   private beginDescentAndLand(): void {
     this.state.step = 'DESCENDING';
-    this.state.stepMessage = `[6/6] Over center reference. Initiating controlled vertical descent & landing...`;
+    this.state.stepMessage = `[6/6] Over Home reference. Initiating controlled vertical descent & landing...`;
     this.notifyState();
 
     audioService.playBeep(659, 150);
@@ -557,7 +708,7 @@ class CircleTestService {
     setTimeout(() => {
       if (this.state.step === 'DESCENDING') {
         this.state.step = 'LANDING';
-        this.state.stepMessage = `[6/6] Final descent to touchdown at takeoff position.`;
+        this.state.stepMessage = `[6/6] Final descent to touchdown at Home position.`;
         this.notifyState();
       }
     }, 1500);
@@ -624,6 +775,7 @@ class CircleTestService {
 
   private clearAllTimers(): void {
     if (this.orbitTicker) clearInterval(this.orbitTicker);
+    if (this.waypointsTicker) clearInterval(this.waypointsTicker);
     if (this.armingWatchdog) clearTimeout(this.armingWatchdog);
     if (this.climbWatchdog) clearTimeout(this.climbWatchdog);
     if (this.transitWatchdog) clearTimeout(this.transitWatchdog);

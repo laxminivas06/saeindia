@@ -18,6 +18,8 @@ import {
   calculateHaversineDistance,
 } from '../../services/groundStationMissionService';
 import { audioService } from '../../services/audioService';
+import { customRouteService, LiveWaypointProgress } from '../../services/customRouteService';
+import { missionEngine } from '../../services/missionEngine';
 import {
   Search,
   Crosshair,
@@ -49,8 +51,11 @@ import {
   X,
   Plus,
   Minus,
-  User
+  User,
+  Pencil,
+  Smartphone
 } from 'lucide-react';
+import { phoneGpsService, PhoneGpsState } from '../../services/phoneGpsService';
 
 interface GoogleMapGroundStationProps {
   telemetry: DroneTelemetry;
@@ -60,9 +65,16 @@ interface GoogleMapGroundStationProps {
   onSetHomePoint: (coords?: { lat: number; lng: number }) => void;
   onStartMission: () => void;
   onEmergencyRTL: () => void;
+  onStopAbortMission?: () => void;
   className?: string;
   isPipVideoVisible?: boolean;
   onTogglePipVideo?: () => void;
+  targetLocation?: LatLngPoint | null;
+  targetLabel?: string;
+  isDrawingRoute?: boolean;
+  onToggleDrawingRoute?: (drawing: boolean) => void;
+  isDrawingReturn?: boolean;
+  onToggleDrawingReturn?: (drawing: boolean) => void;
 }
 
 export const GoogleMapGroundStation: React.FC<GoogleMapGroundStationProps> = ({
@@ -73,9 +85,16 @@ export const GoogleMapGroundStation: React.FC<GoogleMapGroundStationProps> = ({
   onSetHomePoint,
   onStartMission,
   onEmergencyRTL,
+  onStopAbortMission,
   className = '',
   isPipVideoVisible,
   onTogglePipVideo,
+  targetLocation,
+  targetLabel,
+  isDrawingRoute: propIsDrawingRoute,
+  onToggleDrawingRoute,
+  isDrawingReturn: propIsDrawingReturn,
+  onToggleDrawingReturn,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
@@ -85,9 +104,47 @@ export const GoogleMapGroundStation: React.FC<GoogleMapGroundStationProps> = ({
   const droneLayerRef = useRef<L.LayerGroup>(L.layerGroup());
   const homeLayerRef = useRef<L.LayerGroup>(L.layerGroup());
   const missionLayerRef = useRef<L.LayerGroup>(L.layerGroup());
+  const customRouteLayerRef = useRef<L.LayerGroup>(L.layerGroup());
+  const targetLayerRef = useRef<L.LayerGroup>(L.layerGroup());
   const drawingLayerRef = useRef<L.FeatureGroup>(new L.FeatureGroup());
   const breadcrumbsLayerRef = useRef<L.Polyline | null>(null);
   const breadcrumbHistoryRef = useRef<L.LatLng[]>([]);
+
+  // Custom Route State (Requirement 1, 2, 8, 10, 11)
+  const [internalDrawingRoute, setInternalDrawingRoute] = useState<boolean>(false);
+  const [internalDrawingReturn, setInternalDrawingReturn] = useState<boolean>(false);
+  const isDrawingCustomRoute = propIsDrawingRoute !== undefined ? propIsDrawingRoute : internalDrawingRoute;
+  const isDrawingCustomReturn = propIsDrawingReturn !== undefined ? propIsDrawingReturn : internalDrawingReturn;
+
+  const setIsDrawingCustomRoute = (val: boolean) => {
+    setInternalDrawingRoute(val);
+    if (onToggleDrawingRoute) onToggleDrawingRoute(val);
+  };
+
+  const setIsDrawingCustomReturn = (val: boolean) => {
+    setInternalDrawingReturn(val);
+    if (onToggleDrawingReturn) onToggleDrawingReturn(val);
+  };
+
+  const [customMission, setCustomMission] = useState<GroundStationMission | null>(() =>
+    customRouteService.getCurrentMission()
+  );
+  const [liveProgress, setLiveProgress] = useState<LiveWaypointProgress>(() =>
+    customRouteService.getProgress()
+  );
+
+  useEffect(() => {
+    const unsubMission = customRouteService.subscribeMission((m) => {
+      setCustomMission(m);
+    });
+    const unsubProg = customRouteService.subscribeProgress((p) => {
+      setLiveProgress(p);
+    });
+    return () => {
+      unsubMission();
+      unsubProg();
+    };
+  }, []);
 
   // State
   const [currentLayerType, setCurrentLayerType] = useState<MapLayerType>('satellite');
@@ -123,10 +180,11 @@ export const GoogleMapGroundStation: React.FC<GoogleMapGroundStationProps> = ({
 
   // Auto-Centering and Location Tracking References
   const hasAutoCenteredOnDroneRef = useRef<boolean>(false);
-  const operatorMarkerRef = useRef<L.Marker | null>(null);
-  const operatorAccuracyCircleRef = useRef<L.Circle | null>(null);
-  const [isDetectingOperatorLocation, setIsDetectingOperatorLocation] = useState<boolean>(false);
-  const [operatorLocation, setOperatorLocation] = useState<{ lat: number; lng: number; accuracy: number } | null>(null);
+  const hasAutoCenteredOnPhoneRef = useRef<boolean>(false);
+  const phoneMarkerRef = useRef<L.Marker | null>(null);
+  const phoneAccuracyCircleRef = useRef<L.Circle | null>(null);
+  const [phoneGps, setPhoneGps] = useState<PhoneGpsState>(() => phoneGpsService.getState());
+  const [showPhoneGpsInfoPanel, setShowPhoneGpsInfoPanel] = useState<boolean>(false);
 
   // Drone marker references
   const droneMarkerRef = useRef<L.Marker | null>(null);
@@ -219,6 +277,8 @@ export const GoogleMapGroundStation: React.FC<GoogleMapGroundStationProps> = ({
       droneLayerRef.current.addTo(map);
       homeLayerRef.current.addTo(map);
       missionLayerRef.current.addTo(map);
+      customRouteLayerRef.current.addTo(map);
+      targetLayerRef.current.addTo(map);
       drawingLayerRef.current.addTo(map);
 
       // Breadcrumb path for live flight trail
@@ -236,17 +296,28 @@ export const GoogleMapGroundStation: React.FC<GoogleMapGroundStationProps> = ({
       setTimeout(() => {
         map.invalidateSize();
       }, 250);
+
+      // Dedicated ResizeObserver to dynamically resize map whenever container, window, or toolbar wraps
+      const resizeObserver = new ResizeObserver(() => {
+        if (mapInstanceRef.current) {
+          mapInstanceRef.current.invalidateSize();
+        }
+      });
+      if (mapContainerRef.current) {
+        resizeObserver.observe(mapContainerRef.current);
+      }
+
+      return () => {
+        resizeObserver.disconnect();
+        if (mapInstanceRef.current) {
+          mapInstanceRef.current.remove();
+          mapInstanceRef.current = null;
+        }
+      };
     } catch (e: any) {
       console.error('[GCS Map Init Failed]', e);
       setErrorMessage(`Map loading failed: ${e?.message || 'Check network connection'}`);
     }
-
-    return () => {
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove();
-        mapInstanceRef.current = null;
-      }
-    };
   }, []);
 
   // -------------------------------------------------------------
@@ -378,6 +449,161 @@ export const GoogleMapGroundStation: React.FC<GoogleMapGroundStationProps> = ({
   }, [telemetry]);
 
   // -------------------------------------------------------------
+  // Phone GPS Subscriptions & Auto-Centering (Requirements 2, 4, 8)
+  // -------------------------------------------------------------
+  useEffect(() => {
+    const unsubGps = phoneGpsService.subscribe(setPhoneGps);
+    const unsubCenter = phoneGpsService.subscribeCenterMap((coords) => {
+      const map = mapInstanceRef.current;
+      if (map) {
+        map.flyTo([coords.lat, coords.lng], Math.max(18, map.getZoom()), { duration: 1.0 });
+        audioService.playBeep(880, 60);
+        setShowPhoneGpsInfoPanel(true);
+      }
+    });
+    return () => {
+      unsubGps();
+      unsubCenter();
+    };
+  }, []);
+
+  // Auto-center on Phone GPS if FC GPS is not yet established (Requirements 8 & 9)
+  useEffect(() => {
+    if (hasAutoCenteredOnPhoneRef.current) return;
+    if (!hasValidFcGps && phoneGps.status === 'CONNECTED' && phoneGps.latitude && phoneGps.longitude) {
+      const map = mapInstanceRef.current;
+      if (map) {
+        hasAutoCenteredOnPhoneRef.current = true;
+        map.setView([phoneGps.latitude, phoneGps.longitude], 18);
+      }
+    }
+  }, [phoneGps.status, phoneGps.latitude, phoneGps.longitude, hasValidFcGps]);
+
+  // -------------------------------------------------------------
+  // Phone GPS Marker & Continuous Smooth Tracking (Requirements 1, 2, 3, 7)
+  // -------------------------------------------------------------
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    if (
+      !phoneGps.enabled ||
+      phoneGps.status !== 'CONNECTED' ||
+      phoneGps.latitude === null ||
+      phoneGps.longitude === null
+    ) {
+      if (phoneMarkerRef.current) {
+        phoneMarkerRef.current.remove();
+        phoneMarkerRef.current = null;
+      }
+      if (phoneAccuracyCircleRef.current) {
+        phoneAccuracyCircleRef.current.remove();
+        phoneAccuracyCircleRef.current = null;
+      }
+      return;
+    }
+
+    let lat = phoneGps.latitude;
+    let lng = phoneGps.longitude;
+    const accuracy = phoneGps.accuracy || 5;
+    const heading = phoneGps.heading;
+
+    // Prevent marker hiding if phone and drone are very close together (< 2.5m) (Requirement 7)
+    if (hasValidFcGps && telemetry.latitude && telemetry.longitude) {
+      const distToDrone = calculateHaversineDistance(lat, lng, telemetry.latitude, telemetry.longitude);
+      if (distToDrone < 2.5) {
+        // Slight visual separation offset so both markers remain distinctly clickable
+        lat += 0.000015;
+        lng += 0.000015;
+      }
+    }
+
+    const headingArrow =
+      heading !== null
+        ? `<div style="position: absolute; top: -14px; width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-bottom: 14px solid #06b6d4; filter: drop-shadow(0 0 5px #06b6d4); transform: rotate(${heading}deg); transform-origin: 50% 35px;"></div>`
+        : '';
+
+    const phoneHtml = `
+      <div style="position: relative; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;">
+        ${headingArrow}
+        <!-- Pulsing radar ring -->
+        <div class="animate-ping" style="position: absolute; width: 34px; height: 34px; border-radius: 50%; border: 2px solid #06b6d4; opacity: 0.4;"></div>
+        <!-- Smartphone locator badge -->
+        <div style="width: 30px; height: 30px; border-radius: 50%; background: #0891b2; border: 2.5px solid #ffffff; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 12px rgba(6, 182, 212, 0.85);">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <rect width="14" height="20" x="5" y="2" rx="2" ry="2"/>
+            <line x1="12" x2="12.01" y1="18" y2="18"/>
+          </svg>
+        </div>
+      </div>
+    `;
+
+    const phoneIcon = L.divIcon({
+      html: phoneHtml,
+      className: 'phone-location-marker',
+      iconSize: [44, 44],
+      iconAnchor: [22, 22],
+    });
+
+    const popupContent = `
+      <div class="space-y-1.5 p-1 font-mono text-xs select-none">
+        <div class="font-bold text-cyan-400 flex items-center justify-between border-b border-cyan-800/80 pb-1">
+          <span class="flex items-center space-x-1">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><line x1="12" x2="12.01" y1="18" y2="18"/></svg>
+            <span>PHONE GPS</span>
+          </span>
+          <span class="text-[9px] px-1.5 py-0.2 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-600/50">CONNECTED</span>
+        </div>
+        <div class="grid grid-cols-2 gap-x-2 gap-y-1 text-[11px] text-slate-200 mt-1">
+          <div><span class="text-slate-400 text-[10px] block">LATITUDE:</span><span class="font-bold text-slate-100">${phoneGps.latitude.toFixed(6)}</span></div>
+          <div><span class="text-slate-400 text-[10px] block">LONGITUDE:</span><span class="font-bold text-slate-100">${phoneGps.longitude.toFixed(6)}</span></div>
+          <div><span class="text-slate-400 text-[10px] block">ACCURACY:</span><span class="font-bold text-emerald-400">±${accuracy.toFixed(1)} m</span></div>
+          <div><span class="text-slate-400 text-[10px] block">ALTITUDE:</span><span class="font-bold text-amber-300">${phoneGps.altitude !== null ? `${phoneGps.altitude.toFixed(1)} m` : 'N/A'}</span></div>
+          <div class="col-span-2"><span class="text-slate-400 text-[10px] block">HEADING:</span><span class="font-bold text-sky-300">${heading !== null ? `${Math.round(heading)}°` : 'N/A'}</span></div>
+        </div>
+        <div class="text-[9px] text-slate-400 border-t border-slate-800 pt-1 mt-1 flex justify-between">
+          <span>Ground Station Reference</span>
+          <span>${phoneGps.lastUpdateTime || ''}</span>
+        </div>
+      </div>
+    `;
+
+    // Smooth update without reloading map (Requirement 2.6)
+    if (phoneMarkerRef.current) {
+      phoneMarkerRef.current.setLatLng([lat, lng]);
+      phoneMarkerRef.current.setIcon(phoneIcon);
+      phoneMarkerRef.current.setPopupContent(popupContent);
+    } else {
+      const marker = L.marker([lat, lng], {
+        icon: phoneIcon,
+        zIndexOffset: 850,
+      });
+      marker.bindPopup(popupContent, { className: 'tactical-popup' });
+      marker.on('click', () => {
+        setShowPhoneGpsInfoPanel(true);
+      });
+      marker.addTo(map);
+      phoneMarkerRef.current = marker;
+    }
+
+    // Smooth accuracy circle update
+    if (phoneAccuracyCircleRef.current) {
+      phoneAccuracyCircleRef.current.setLatLng([lat, lng]);
+      phoneAccuracyCircleRef.current.setRadius(accuracy);
+    } else {
+      const circle = L.circle([lat, lng], {
+        radius: accuracy,
+        color: '#06b6d4',
+        fillColor: '#06b6d4',
+        fillOpacity: 0.12,
+        weight: 1.5,
+        dashArray: '4, 4',
+      }).addTo(map);
+      phoneAccuracyCircleRef.current = circle;
+    }
+  }, [phoneGps, hasValidFcGps, telemetry.latitude, telemetry.longitude]);
+
+  // -------------------------------------------------------------
   // Home Point Marker & Radar Beacon
   // -------------------------------------------------------------
   useEffect(() => {
@@ -432,7 +658,7 @@ export const GoogleMapGroundStation: React.FC<GoogleMapGroundStationProps> = ({
     `, { className: 'tactical-popup' });
 
     // Allow dragging Home Point before mission start
-    marker.on('dragend', (e) => {
+    marker.on('dragend', (e: any) => {
       const target = e.target as L.Marker;
       const pos = target.getLatLng();
       onSetHomePoint({ lat: pos.lat, lng: pos.lng });
@@ -442,6 +668,69 @@ export const GoogleMapGroundStation: React.FC<GoogleMapGroundStationProps> = ({
     marker.addTo(homeLayerRef.current);
     homeMarkerRef.current = marker;
   }, [homePoint, telemetry.isArmed, missionState]);
+
+  // -------------------------------------------------------------
+  // Detected Target / Box Location Marker
+  // -------------------------------------------------------------
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    targetLayerRef.current.clearLayers();
+
+    if (!targetLocation || !targetLocation.lat || !targetLocation.lng) return;
+
+    const targetHtml = `
+      <div style="position: relative; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;">
+        <div style="position: absolute; width: 40px; height: 40px; border-radius: 8px; border: 2px solid #ef4444; background: rgba(239, 68, 68, 0.25); animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
+        <div style="width: 26px; height: 26px; border-radius: 6px; background: #ef4444; border: 2px solid #ffffff; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 14px rgba(239, 68, 68, 0.9);">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <rect width="18" height="18" x="3" y="3" rx="2"/>
+            <path d="M9 12h6"/>
+            <path d="M12 9v6"/>
+          </svg>
+        </div>
+      </div>
+    `;
+
+    const targetIcon = L.divIcon({
+      html: targetHtml,
+      className: 'target-detected-pin',
+      iconSize: [44, 44],
+      iconAnchor: [22, 22]
+    });
+
+    const marker = L.marker([targetLocation.lat, targetLocation.lng], {
+      icon: targetIcon,
+      zIndexOffset: 950
+    });
+
+    const popupContent = `
+      <div class="space-y-1.5 font-mono">
+        <div class="font-black text-rose-400 flex items-center space-x-1">
+          <span>📦 TARGET BOX DETECTED</span>
+        </div>
+        <div class="text-[10px] text-slate-300">Lat: ${targetLocation.lat.toFixed(6)}</div>
+        <div class="text-[10px] text-slate-300">Lon: ${targetLocation.lng.toFixed(6)}</div>
+        ${targetLabel ? `<div class="text-[10px] text-emerald-400 font-bold mt-1">${targetLabel}</div>` : ''}
+        <button id="btn-popup-go-target" style="width:100%;margin-top:6px;padding:6px;background:#e11d48;color:#fff;border:none;border-radius:6px;font-weight:800;font-size:11px;cursor:pointer;">
+          🎯 GO TO TARGET
+        </button>
+      </div>
+    `;
+
+    marker.bindPopup(popupContent, { className: 'tactical-popup' });
+    marker.on('popupopen', () => {
+      const btn = document.getElementById('btn-popup-go-target');
+      if (btn) {
+        btn.onclick = () => {
+          customRouteService.goToTarget({ lat: targetLocation.lat, lng: targetLocation.lng });
+          marker.closePopup();
+        };
+      }
+    });
+
+    marker.addTo(targetLayerRef.current);
+  }, [targetLocation, targetLabel]);
 
   // -------------------------------------------------------------
   // Map Click & Drawing Handling
@@ -454,6 +743,38 @@ export const GoogleMapGroundStation: React.FC<GoogleMapGroundStationProps> = ({
       const clickedLat = e.latlng.lat;
       const clickedLng = e.latlng.lng;
 
+      // 1. Custom Route Outbound Drawing (Requirements 2, 3)
+      if (isDrawingCustomRoute) {
+        const existing = customRouteService.getOutboundPoints();
+        let updated: LatLngPoint[];
+        if (existing.length === 0) {
+          // Requirement 3: WP0 is automatically Home
+          if (homePoint.isSet && homePoint.latitude !== 0) {
+            updated = [
+              { lat: homePoint.latitude, lng: homePoint.longitude },
+              { lat: clickedLat, lng: clickedLng }
+            ];
+          } else {
+            updated = [{ lat: clickedLat, lng: clickedLng }];
+          }
+        } else {
+          updated = [...existing, { lat: clickedLat, lng: clickedLng }];
+        }
+        customRouteService.setOutboundPoints(updated);
+        audioService.playBeep(720, 60);
+        return;
+      }
+
+      // 2. Custom Return Route Drawing (Requirement 11)
+      if (isDrawingCustomReturn) {
+        const existingRet = customRouteService.getReturnPoints();
+        const updatedRet = [...existingRet, { lat: clickedLat, lng: clickedLng }];
+        customRouteService.setReturnPoints(updatedRet);
+        audioService.playBeep(720, 60);
+        return;
+      }
+
+      // 3. Set Home Point Tool
       if (activeTool === 'set_home') {
         onSetHomePoint({ lat: clickedLat, lng: clickedLng });
         setActiveTool('select');
@@ -461,6 +782,7 @@ export const GoogleMapGroundStation: React.FC<GoogleMapGroundStationProps> = ({
         return;
       }
 
+      // 4. Legacy Pattern Drawing (Grid / Polygon / Circle)
       if (activeTool === 'point' || activeTool === 'path' || activeTool === 'polygon') {
         const newPts = [...drawnPoints, { lat: clickedLat, lng: clickedLng }];
         setDrawnPoints(newPts);
@@ -489,7 +811,15 @@ export const GoogleMapGroundStation: React.FC<GoogleMapGroundStationProps> = ({
     return () => {
       map.off('click', handleMapClick);
     };
-  }, [activeTool, drawnPoints, circleCenter, onSetHomePoint]);
+  }, [
+    activeTool,
+    drawnPoints,
+    circleCenter,
+    onSetHomePoint,
+    isDrawingCustomRoute,
+    isDrawingCustomReturn,
+    homePoint
+  ]);
 
   // -------------------------------------------------------------
   // Drawing Layer Visuals (Visualizing active drawing on map)
@@ -720,7 +1050,7 @@ export const GoogleMapGroundStation: React.FC<GoogleMapGroundStationProps> = ({
       `, { className: 'tactical-popup' });
 
       // If user drags individual waypoint in Waypoint mode: update coordinate
-      wpMarker.on('dragend', (e) => {
+      wpMarker.on('dragend', (e: any) => {
         const target = e.target as L.Marker;
         const newPos = target.getLatLng();
         setDrawnPoints((prev) => {
@@ -736,6 +1066,162 @@ export const GoogleMapGroundStation: React.FC<GoogleMapGroundStationProps> = ({
       wpMarker.addTo(missionLayerRef.current);
     });
   }, [generatedMission, homePoint, telemetry.isArmed, activeMissionType]);
+
+  // -------------------------------------------------------------
+  // Render Custom Drawn Route on Map (Requirements 1, 3, 4, 9, 10, 11, 14, 15)
+  // -------------------------------------------------------------
+  useEffect(() => {
+    const layer = customRouteLayerRef.current;
+    layer.clearLayers();
+
+    if (!customMission || !customMission.waypoints || customMission.waypoints.length === 0) {
+      return;
+    }
+
+    const outbound = customMission.outboundWaypoints || [];
+    const returnWps = customMission.returnWaypoints || [];
+    const activeIdx = liveProgress.currentWaypointIndex;
+    const completedSet = new Set(liveProgress.completedWaypoints || []);
+
+    // 1. Render Outbound Path (Solid Sky Blue)
+    if (outbound.length >= 2) {
+      const latlngs = outbound.map((w) => [w.lat, w.lng] as [number, number]);
+      const outboundPolyline = L.polyline(latlngs, {
+        color: '#0284c7',
+        weight: 3.5,
+        opacity: 0.9,
+      });
+      outboundPolyline.bindTooltip('Planned Custom Outbound Route', { sticky: true });
+      outboundPolyline.addTo(layer);
+    }
+
+    // 2. Render Outbound Waypoint Markers
+    outbound.forEach((wp, idx) => {
+      const isHome = idx === 0 && (wp.name?.includes('HOME') || wp.action === 'TAKEOFF');
+      const isTarget = idx === outbound.length - 1 && outbound.length > 1;
+      const isActive = liveProgress.isExecuting && wp.index === activeIdx;
+      const isCompleted = completedSet.has(wp.index);
+
+      let pinColor = '#0284c7';
+      if (isHome) pinColor = '#10b981';
+      else if (isTarget) pinColor = '#ef4444';
+      if (isCompleted) pinColor = '#059669';
+
+      const pinHtml = `
+        <div style="position: relative; display: flex; align-items: center; justify-content: center;">
+          ${isActive ? `
+            <div style="position: absolute; width: 38px; height: 38px; border-radius: 50%; border: 2.5px solid #38bdf8; background: rgba(56, 189, 248, 0.25); animation: ping 1.2s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
+          ` : ''}
+          <div style="background: ${pinColor}; color: #ffffff; width: ${isHome || isTarget ? '28px' : '24px'}; height: ${isHome || isTarget ? '28px' : '24px'}; border-radius: 50%; border: 2px solid #ffffff; font-weight: 800; font-size: 10px; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(0,0,0,0.7); cursor: pointer;">
+            ${isCompleted ? '✓' : isHome ? 'H' : isTarget ? '🎯' : wp.index}
+          </div>
+        </div>
+      `;
+
+      const icon = L.divIcon({
+        html: pinHtml,
+        className: 'custom-wp-pin',
+        iconSize: [28, 28],
+        iconAnchor: [14, 14],
+      });
+
+      const marker = L.marker([wp.lat, wp.lng], { icon });
+      marker.bindPopup(`
+        <div class="space-y-1 font-mono">
+          <div class="font-black text-sky-400 flex items-center justify-between">
+            <span>${wp.name || `WP${wp.index}`}</span>
+            <span class="text-[9px] px-1 bg-slate-800 text-slate-300 rounded">${wp.action || 'NAV'}</span>
+          </div>
+          <div class="text-[10px] text-slate-300">Lat: ${wp.lat.toFixed(6)} | Lng: ${wp.lng.toFixed(6)}</div>
+          <div class="text-[10px] text-slate-300">Altitude: ${wp.altitude}m | Speed: ${wp.speed}m/s</div>
+          ${wp.distanceFromPreviousMeters ? `<div class="text-[9px] text-slate-400">Leg Dist: ${wp.distanceFromPreviousMeters}m</div>` : ''}
+          ${isCompleted ? '<div class="text-[10px] text-emerald-400 font-bold">STATUS: COMPLETED ✓</div>' : ''}
+          ${isActive ? '<div class="text-[10px] text-sky-300 font-bold animate-pulse">STATUS: ACTIVE WAYPOINT ➔</div>' : ''}
+        </div>
+      `, { className: 'tactical-popup' });
+
+      marker.addTo(layer);
+    });
+
+    // 3. Render Return Route (Requirements 9, 10, 11)
+    if (returnWps.length > 0) {
+      if (customMission.returnBehavior === 'SAME_PATH_BACK' || customMission.returnBehavior === 'CUSTOM_RETURN_PATH') {
+        const lastOutbound = outbound[outbound.length - 1];
+        const returnCoords: [number, number][] = [];
+        if (lastOutbound) returnCoords.push([lastOutbound.lat, lastOutbound.lng]);
+        returnWps.forEach((w) => returnCoords.push([w.lat, w.lng]));
+
+        const returnColor = customMission.returnBehavior === 'SAME_PATH_BACK' ? '#f59e0b' : '#ec4899';
+        const returnLine = L.polyline(returnCoords, {
+          color: returnColor,
+          weight: 3,
+          dashArray: '6, 6',
+          opacity: 0.85,
+        });
+        returnLine.bindTooltip(`Return Route (${customMission.returnBehavior === 'SAME_PATH_BACK' ? 'Same Path Back' : 'Custom Return'})`, { sticky: true });
+        returnLine.addTo(layer);
+
+        // Return Waypoint pins
+        returnWps.forEach((wp, idx) => {
+          const isFinalHome = idx === returnWps.length - 1;
+          const isActive = liveProgress.isExecuting && wp.index === activeIdx;
+          const isCompleted = completedSet.has(wp.index);
+          const pinColor = isFinalHome ? '#10b981' : returnColor;
+
+          const rHtml = `
+            <div style="position: relative; display: flex; align-items: center; justify-content: center;">
+              ${isActive ? `
+                <div style="position: absolute; width: 34px; height: 34px; border-radius: 50%; border: 2.5px solid ${returnColor}; background: rgba(245, 158, 11, 0.25); animation: ping 1.2s infinite;"></div>
+              ` : ''}
+              <div style="background: ${pinColor}; color: #ffffff; width: 22px; height: 22px; border-radius: 50%; border: 2px solid #ffffff; font-weight: 800; font-size: 9px; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 6px rgba(0,0,0,0.7); cursor: pointer;">
+                ${isCompleted ? '✓' : isFinalHome ? 'H' : `R${idx + 1}`}
+              </div>
+            </div>
+          `;
+
+          const rIcon = L.divIcon({
+            html: rHtml,
+            className: 'return-wp-pin',
+            iconSize: [22, 22],
+            iconAnchor: [11, 11],
+          });
+
+          const rMarker = L.marker([wp.lat, wp.lng], { icon: rIcon });
+          rMarker.bindPopup(`
+            <div class="space-y-1 font-mono">
+              <div class="font-black text-amber-400 flex items-center justify-between">
+                <span>${wp.name || `Return WP${idx + 1}`}</span>
+                <span class="text-[9px] px-1 bg-slate-800 text-slate-300 rounded">${wp.action || 'NAV'}</span>
+              </div>
+              <div class="text-[10px] text-slate-300">Lat: ${wp.lat.toFixed(6)} | Lng: ${wp.lng.toFixed(6)}</div>
+              <div class="text-[10px] text-slate-300">Altitude: ${wp.altitude}m | Speed: ${wp.speed}m/s</div>
+            </div>
+          `, { className: 'tactical-popup' });
+
+          rMarker.addTo(layer);
+        });
+      } else if (customMission.returnBehavior === 'DIRECT_RTL' || !customMission.returnBehavior) {
+        // Direct RTL line from last outbound to home
+        const lastOutbound = outbound[outbound.length - 1];
+        if (lastOutbound && homePoint.isSet && homePoint.latitude !== 0) {
+          const rtlLine = L.polyline(
+            [
+              [lastOutbound.lat, lastOutbound.lng],
+              [homePoint.latitude, homePoint.longitude],
+            ],
+            {
+              color: '#ef4444',
+              weight: 2.5,
+              dashArray: '6, 6',
+              opacity: 0.8,
+            }
+          );
+          rtlLine.bindTooltip('Return: DIRECT RTL Straight to Home', { sticky: true });
+          rtlLine.addTo(layer);
+        }
+      }
+    }
+  }, [customMission, liveProgress, homePoint]);
 
   // -------------------------------------------------------------
   // Search Nominatim API (Reused from GoogleMap.html)
@@ -815,81 +1301,22 @@ export const GoogleMapGroundStation: React.FC<GoogleMapGroundStationProps> = ({
 
   const handleCenterDrone = handleRecenterDrone;
 
-  const handleGetOperatorLocation = () => {
+  const handleRecenterPhone = () => {
     const map = mapInstanceRef.current;
     if (!map) return;
 
-    if (!navigator.geolocation) {
-      setErrorMessage('Browser geolocation is not supported on this device.');
-      return;
+    if (phoneGps.status === 'CONNECTED' && phoneGps.latitude !== null && phoneGps.longitude !== null) {
+      map.flyTo([phoneGps.latitude, phoneGps.longitude], Math.max(18, map.getZoom()), { duration: 1.0 });
+      audioService.playBeep(880, 60);
+      setShowPhoneGpsInfoPanel(true);
+    } else if (phoneGps.status === 'WAITING_FOR_LOCATION') {
+      setErrorMessage('Phone GPS: Waiting for location fix...');
+    } else if (phoneGps.status === 'PERMISSION_DENIED') {
+      setErrorMessage('Phone GPS: Location permission was denied in browser settings.');
+    } else {
+      phoneGpsService.startWatching();
+      setErrorMessage('Phone GPS: Starting location watch...');
     }
-
-    setIsDetectingOperatorLocation(true);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setIsDetectingOperatorLocation(false);
-        const { latitude, longitude, accuracy } = pos.coords;
-        setOperatorLocation({ lat: latitude, lng: longitude, accuracy });
-
-        // Update or create operator marker
-        if (operatorMarkerRef.current) {
-          operatorMarkerRef.current.setLatLng([latitude, longitude]);
-        } else {
-          const operatorIcon = L.divIcon({
-            className: 'operator-location-marker',
-            html: `
-              <div style="background: #2563eb; width: 30px; height: 30px; border-radius: 50%; border: 2.5px solid #ffffff; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 10px rgba(37, 99, 235, 0.7);">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>
-                  <circle cx="12" cy="7" r="4"/>
-                </svg>
-              </div>
-            `,
-            iconSize: [30, 30],
-            iconAnchor: [15, 15]
-          });
-
-          const marker = L.marker([latitude, longitude], { icon: operatorIcon, zIndexOffset: 700 });
-          marker.bindPopup(`
-            <div class="space-y-1">
-              <div class="font-bold text-blue-400">OPERATOR / DEVICE LOCATION</div>
-              <div class="text-[10px] text-slate-300">Lat: ${latitude.toFixed(6)} | Lon: ${longitude.toFixed(6)}</div>
-              <div class="text-[10px] text-slate-400">Accuracy: ±${accuracy.toFixed(1)}m</div>
-              <div class="text-[9px] text-slate-500 italic mt-1">(Ground Station device position, distinct from drone)</div>
-            </div>
-          `, { className: 'tactical-popup' });
-          marker.addTo(map);
-          operatorMarkerRef.current = marker;
-        }
-
-        // Update or create accuracy circle
-        if (operatorAccuracyCircleRef.current) {
-          operatorAccuracyCircleRef.current.setLatLng([latitude, longitude]);
-          operatorAccuracyCircleRef.current.setRadius(accuracy);
-        } else {
-          const circle = L.circle([latitude, longitude], {
-            radius: accuracy,
-            color: '#3b82f6',
-            fillColor: '#3b82f6',
-            fillOpacity: 0.1,
-            weight: 1,
-            dashArray: '3, 3'
-          }).addTo(map);
-          operatorAccuracyCircleRef.current = circle;
-        }
-
-        audioService.playBeep(880, 80);
-      },
-      (err) => {
-        setIsDetectingOperatorLocation(false);
-        let msg = 'Unable to get device location.';
-        if (err.code === 1) msg = 'Location access was denied in browser settings.';
-        else if (err.code === 2) msg = 'Device location is unavailable.';
-        else if (err.code === 3) msg = 'Location request timed out.';
-        setErrorMessage(msg);
-      },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
-    );
   };
 
   const handleCenterHome = () => {
@@ -995,12 +1422,12 @@ export const GoogleMapGroundStation: React.FC<GoogleMapGroundStationProps> = ({
   };
 
   return (
-    <div className={`relative flex flex-col w-full h-[620px] sm:h-[680px] lg:h-[750px] bg-sae-dark rounded-2xl border border-slate-800 overflow-hidden select-none font-mono ${className}`}>
+    <div className={`relative flex flex-col w-full h-[540px] sm:h-[620px] lg:h-[700px] bg-sae-dark rounded-2xl border border-slate-800 shadow-2xl overflow-hidden isolate select-none font-mono ${className}`}>
 
       {/* ============================================================ */}
       {/* 1. TOP GROUND CONTROL STATUS BAR                             */}
       {/* ============================================================ */}
-      <div className="z-10 flex flex-wrap items-center justify-between gap-2 px-3 py-2 bg-slate-900/95 border-b border-slate-800 text-xs text-slate-300">
+      <div className="z-20 flex flex-wrap items-center justify-between gap-2 px-3 py-2 bg-slate-900/98 border-b border-slate-800 text-xs text-slate-300 shrink-0">
         
         {/* Left: State Badge & Location Status (Requirement 18 & 3) */}
         <div className="flex items-center space-x-2 sm:space-x-3 overflow-x-auto py-0.5">
@@ -1071,6 +1498,20 @@ export const GoogleMapGroundStation: React.FC<GoogleMapGroundStationProps> = ({
             <span className="hidden sm:inline">RECENTER ON DRONE</span>
           </button>
 
+          <button
+            type="button"
+            onClick={handleRecenterPhone}
+            className={`px-2.5 py-1 rounded text-[11px] font-black uppercase flex items-center space-x-1.5 transition cursor-pointer border ${
+              phoneGps.status === 'CONNECTED'
+                ? 'bg-cyan-950/80 hover:bg-cyan-900 border-cyan-500/60 text-cyan-300 hover:text-white shadow-sm shadow-cyan-600/20'
+                : 'bg-slate-900 border-slate-800 text-slate-500 hover:text-slate-400'
+            }`}
+            title="Center map on Phone GPS position (Operator Reference)"
+          >
+            <Smartphone className="w-3.5 h-3.5 text-cyan-400" />
+            <span className="hidden sm:inline">CENTER ON PHONE</span>
+          </button>
+
           {onTogglePipVideo && (
             <button
               type="button"
@@ -1110,94 +1551,275 @@ export const GoogleMapGroundStation: React.FC<GoogleMapGroundStationProps> = ({
       </div>
 
       {/* ============================================================ */}
-      {/* 2. MAIN WORKSPACE (MAP + FLOATING OVERLAYS + SIDE PANEL)      */}
+      {/* 2. DEDICATED SEARCH / MISSION PLANNER TOOLBAR (Requirement 4) */}
       {/* ============================================================ */}
-      <div className="relative flex-1 w-full h-full flex overflow-hidden">
+      <div className="z-20 flex flex-wrap items-center justify-between gap-2 px-3 py-2 bg-slate-900/90 border-b border-slate-800/80 backdrop-blur-md text-xs shrink-0">
+        
+        {/* Left: Search Bar & Map Layer Switcher */}
+        <div className="flex items-center flex-wrap gap-2">
+          {/* Location Search Bar */}
+          <div className="relative w-48 sm:w-64">
+            <div className="relative flex items-center bg-slate-950/80 rounded-lg border border-slate-700 shadow-sm overflow-hidden">
+              <Search className="w-3.5 h-3.5 ml-2.5 text-slate-400 shrink-0" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSearchPlaces()}
+                placeholder="Search location/coords..."
+                className="w-full bg-transparent px-2 py-1.5 text-xs text-white placeholder-slate-400 focus:outline-none"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="p-1 text-slate-400 hover:text-white"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={handleSearchPlaces}
+                disabled={isSearching}
+                className="px-2 py-1.5 bg-sky-600 hover:bg-sky-500 text-white font-bold text-[10px] uppercase transition cursor-pointer"
+              >
+                {isSearching ? '...' : 'GO'}
+              </button>
+            </div>
+
+            {/* Search Dropdown Results */}
+            {searchResults.length > 0 && (
+              <div className="absolute top-10 left-0 w-72 sm:w-80 bg-slate-900/98 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl overflow-hidden mt-1 max-h-56 overflow-y-auto z-[600]">
+                {searchResults.map((res, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => handleSelectSearchResult(res)}
+                    className="w-full text-left p-2.5 hover:bg-sky-950/60 border-b border-slate-800 text-[11px] text-slate-200 flex items-start space-x-2 transition"
+                  >
+                    <MapPin className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+                    <span className="line-clamp-2 leading-tight">{res.displayName}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Map Layer Switcher (Street / Sat / Topo / Dark) */}
+          <div className="flex items-center bg-slate-950/80 p-0.5 rounded-lg border border-slate-800 space-x-0.5">
+            {[
+              { id: 'satellite', label: 'SAT' },
+              { id: 'street', label: 'STR' },
+              { id: 'topo', label: 'TOPO' },
+              { id: 'dark', label: 'DARK' },
+            ].map((layer) => (
+              <button
+                key={layer.id}
+                type="button"
+                onClick={() => switchMapLayer(layer.id as MapLayerType)}
+                className={`px-2 py-1 rounded text-[10px] font-extrabold uppercase transition cursor-pointer ${
+                  currentLayerType === layer.id
+                    ? 'bg-sky-600 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                {layer.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Right: Mission Planner Route Controls (Requirements 2, 8, 22) */}
+        <div className="flex items-center flex-wrap gap-1.5">
+          {!telemetry.isArmed && missionState === 'IDLE' ? (
+            <>
+              {/* 1. DRAW ROUTE (Requirement 2) */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (isDrawingCustomRoute) {
+                    setIsDrawingCustomRoute(false);
+                  } else {
+                    setIsDrawingCustomRoute(true);
+                    setIsDrawingCustomReturn(false);
+                    // Requirement 3: Auto seed WP0 from Pixhawk Home
+                    if (customRouteService.getOutboundPoints().length === 0 && homePoint.isSet && homePoint.latitude !== 0) {
+                      customRouteService.setOutboundPoints([{ lat: homePoint.latitude, lng: homePoint.longitude }]);
+                    }
+                  }
+                  audioService.playBeep(700, 60);
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-black uppercase flex items-center space-x-1.5 transition cursor-pointer min-h-[36px] ${
+                  isDrawingCustomRoute
+                    ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-md shadow-amber-500/40 animate-pulse'
+                    : 'bg-sky-600 hover:bg-sky-500 text-white shadow-md shadow-sky-600/30'
+                }`}
+                title="Draw Custom Flight Route on Google Maps starting from Home"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+                <span>{isDrawingCustomRoute ? 'DONE DRAWING' : 'DRAW ROUTE'}</span>
+              </button>
+
+              {/* 2. DRAW RETURN ROUTE (Requirement 11) */}
+              {customRouteService.getReturnBehavior() === 'CUSTOM_RETURN_PATH' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsDrawingCustomReturn(!isDrawingCustomReturn);
+                    setIsDrawingCustomRoute(false);
+                    audioService.playBeep(700, 60);
+                  }}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-black uppercase flex items-center space-x-1.5 transition cursor-pointer min-h-[36px] ${
+                    isDrawingCustomReturn
+                      ? 'bg-purple-500 hover:bg-purple-400 text-white shadow-md animate-pulse'
+                      : 'bg-purple-900/80 hover:bg-purple-800 text-purple-200 border border-purple-500/40'
+                  }`}
+                  title="Draw Custom Return Route from Target to Home"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>{isDrawingCustomReturn ? 'DONE RETURN ROUTE' : 'DRAW RETURN ROUTE'}</span>
+                </button>
+              )}
+
+              {/* Route Action Buttons when custom mission exists (Requirement 8, 22) */}
+              {customMission && customMission.waypoints && customMission.waypoints.length > 0 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      customRouteService.reverseRoute();
+                      audioService.playBeep(650, 60);
+                    }}
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold uppercase flex items-center space-x-1 transition cursor-pointer min-h-[36px]"
+                    title="Reverse Route"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span className="hidden sm:inline">REVERSE</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      customRouteService.clearRoute();
+                      setIsDrawingCustomRoute(false);
+                      setIsDrawingCustomReturn(false);
+                      audioService.playBeep(450, 80);
+                    }}
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-rose-950 text-rose-300 border border-slate-700 hover:border-rose-500/50 text-xs font-bold uppercase flex items-center space-x-1 transition cursor-pointer min-h-[36px]"
+                    title="Clear Route"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    <span className="hidden sm:inline">CLEAR</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const res = await customRouteService.uploadMission();
+                      setUploadFeedback(res);
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-sky-950 hover:bg-sky-900 text-sky-200 border border-sky-500/50 text-xs font-black uppercase flex items-center space-x-1.5 transition cursor-pointer min-h-[36px]"
+                    title="Upload Route to ESP32 / Pixhawk"
+                  >
+                    <Send className="w-3.5 h-3.5 text-sky-400" />
+                    <span className="hidden sm:inline">SEND TO DRONE</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsArmingModalOpen(true)}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black uppercase flex items-center space-x-1.5 transition cursor-pointer min-h-[36px] shadow-lg shadow-emerald-600/30 animate-pulse"
+                    title="Start Mission"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-current" />
+                    <span>START MISSION</span>
+                  </button>
+                </>
+              )}
+            </>
+          ) : (
+            /* During Active Mission Controls (Requirement 22) */
+            <div className="flex items-center space-x-2">
+              <div className="flex items-center space-x-2 px-2.5 py-1.5 bg-emerald-950/70 border border-emerald-500/40 rounded-lg text-emerald-300 font-extrabold text-[11px] animate-pulse">
+                <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                <span>MISSION IN PROGRESS</span>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (onStopAbortMission) onStopAbortMission();
+                  else missionEngine.abortMission('Operator pressed STOP / ABORT on Map');
+                }}
+                className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-slate-950 text-xs font-black uppercase flex items-center space-x-1.5 transition cursor-pointer min-h-[36px]"
+                title="Stop / Abort Mission and Hover in Loiter"
+              >
+                <AlertTriangle className="w-3.5 h-3.5" />
+                <span>STOP / ABORT</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={onEmergencyRTL}
+                className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-black uppercase flex items-center space-x-1.5 transition cursor-pointer min-h-[36px] shadow-lg shadow-rose-600/40"
+                title="Immediate Return-to-Launch Failsafe"
+              >
+                <ShieldAlert className="w-3.5 h-3.5" />
+                <span>RTL</span>
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ============================================================ */}
+      {/* 3. ACTIVE DRAWING GUIDANCE BANNER (when drawing)              */}
+      {/* ============================================================ */}
+      {isDrawingCustomRoute && (
+        <div className="z-20 px-3 py-1.5 bg-amber-950/95 border-b border-amber-500/60 text-amber-200 text-xs flex items-center justify-between shrink-0 font-mono shadow-md animate-in fade-in">
+          <div className="flex items-center space-x-2">
+            <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+            <span className="font-bold">CLICK ON MAP TO ADD WAYPOINTS (Connecting from WP0 Home)</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsDrawingCustomRoute(false)}
+            className="px-2.5 py-1 rounded bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[11px] uppercase cursor-pointer"
+          >
+            DONE DRAWING
+          </button>
+        </div>
+      )}
+
+      {isDrawingCustomReturn && (
+        <div className="z-20 px-3 py-1.5 bg-purple-950/95 border-b border-purple-500/60 text-purple-200 text-xs flex items-center justify-between shrink-0 font-mono shadow-md animate-in fade-in">
+          <div className="flex items-center space-x-2">
+            <span className="w-2 h-2 rounded-full bg-purple-400 animate-ping" />
+            <span className="font-bold">CLICK ON MAP TO DRAW CUSTOM RETURN ROUTE BACK TO HOME</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsDrawingCustomReturn(false)}
+            className="px-2.5 py-1 rounded bg-purple-500 hover:bg-purple-400 text-white font-black text-[11px] uppercase cursor-pointer"
+          >
+            DONE RETURN ROUTE
+          </button>
+        </div>
+      )}
+
+      {/* ============================================================ */}
+      {/* 4. MAIN MAP WORKSPACE CANVAS & IN-CANVAS CONTROLS             */}
+      {/* ============================================================ */}
+      <div className="relative flex-1 w-full h-full min-h-0 flex overflow-hidden">
         
         {/* LEAFLET GOOGLE MAP VIEW CONTAINER */}
         <div ref={mapContainerRef} className="w-full h-full z-0" />
 
         {/* ------------------------------------------------------------- */}
-        {/* TOP LEFT: SEARCH BAR (GoogleMap.html Nominatim Search)        */}
+        {/* FLOATING DRAWING TOOLBAR (Left Side Palette)                  */}
         {/* ------------------------------------------------------------- */}
-        <div className="absolute top-3 left-3 z-[400] w-64 sm:w-80">
-          <div className="relative flex items-center bg-slate-900/90 backdrop-blur-md rounded-xl border border-slate-700 shadow-xl overflow-hidden">
-            <Search className="w-4 h-4 ml-3 text-slate-400 shrink-0" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSearchPlaces()}
-              placeholder="Search location or coordinates..."
-              className="w-full bg-transparent px-2.5 py-2 text-xs text-white placeholder-slate-400 focus:outline-none"
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => setSearchQuery('')}
-                className="p-1.5 text-slate-400 hover:text-white"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={handleSearchPlaces}
-              disabled={isSearching}
-              className="px-2.5 py-2 bg-sky-600 hover:bg-sky-500 text-white font-bold text-[10px] uppercase transition cursor-pointer"
-            >
-              {isSearching ? '...' : 'GO'}
-            </button>
-          </div>
-
-          {/* Search Dropdown Results */}
-          {searchResults.length > 0 && (
-            <div className="absolute top-11 left-0 w-full bg-slate-900/95 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl overflow-hidden mt-1 max-h-56 overflow-y-auto">
-              {searchResults.map((res, i) => (
-                <button
-                  key={i}
-                  type="button"
-                  onClick={() => handleSelectSearchResult(res)}
-                  className="w-full text-left p-2.5 hover:bg-sky-950/60 border-b border-slate-800 text-[11px] text-slate-200 flex items-start space-x-2 transition"
-                >
-                  <MapPin className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
-                  <span className="line-clamp-2 leading-tight">{res.displayName}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* ------------------------------------------------------------- */}
-        {/* TOP RIGHT: MAP LAYER SWITCHER (Street / Sat / Topo / Dark)    */}
-        {/* Reused from GoogleMap.html buttons                            */}
-        {/* ------------------------------------------------------------- */}
-        <div className="absolute top-3 right-3 sm:right-auto sm:left-[350px] z-[400] flex items-center bg-slate-900/90 backdrop-blur-md p-1 rounded-xl border border-slate-700 shadow-xl space-x-1">
-          {[
-            { id: 'satellite', label: 'SATELLITE' },
-            { id: 'street', label: 'STREET' },
-            { id: 'topo', label: 'TOPO' },
-            { id: 'dark', label: 'DARK' },
-          ].map((layer) => (
-            <button
-              key={layer.id}
-              type="button"
-              onClick={() => switchMapLayer(layer.id as MapLayerType)}
-              className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold uppercase transition cursor-pointer ${
-                currentLayerType === layer.id
-                  ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
-              }`}
-            >
-              {layer.label}
-            </button>
-          ))}
-        </div>
-
-        {/* ------------------------------------------------------------- */}
-        {/* FLOATING DRAWING TOOLBAR (Left Side on Desktop / Bottom)      */}
-        {/* ------------------------------------------------------------- */}
-        <div className="absolute left-3 top-16 sm:top-16 z-[400] flex flex-col bg-slate-900/90 backdrop-blur-md p-1.5 rounded-xl border border-slate-700 shadow-2xl space-y-1">
+        <div className="absolute left-3 top-3 z-[400] flex flex-col bg-slate-900/90 backdrop-blur-md p-1.5 rounded-xl border border-slate-700 shadow-2xl space-y-1">
           <div className="text-[9px] font-black uppercase text-slate-400 px-1 py-0.5 text-center">
             DRAW
           </div>
@@ -1338,19 +1960,18 @@ export const GoogleMapGroundStation: React.FC<GoogleMapGroundStationProps> = ({
             <MapPin className="w-4 h-4 text-cyan-400" />
           </button>
 
-          {/* Operator Device Location (Browser Geolocation - distinct from drone) */}
+          {/* Phone GPS Location (Standard Geolocation API - distinct from drone) */}
           <button
             type="button"
-            onClick={handleGetOperatorLocation}
-            disabled={isDetectingOperatorLocation}
+            onClick={handleRecenterPhone}
             className={`p-2 rounded-lg text-xs font-bold flex items-center justify-center transition cursor-pointer ${
-              isDetectingOperatorLocation
-                ? 'bg-blue-900/60 text-blue-200 animate-pulse'
-                : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+              phoneGps.status === 'CONNECTED'
+                ? 'text-cyan-400 hover:bg-cyan-950/80 hover:text-cyan-200'
+                : 'text-slate-400 hover:bg-slate-800 hover:text-white'
             }`}
-            title="Locate Operator / Ground Station Device (Browser Geolocation)"
+            title="Locate Phone GPS (Operator Reference)"
           >
-            <User className="w-4 h-4 text-blue-400" />
+            <Smartphone className="w-4 h-4 text-cyan-400" />
           </button>
         </div>
 
@@ -1358,7 +1979,7 @@ export const GoogleMapGroundStation: React.FC<GoogleMapGroundStationProps> = ({
         {/* REQUIREMENT 3: FC GPS FIX STATUS FLOATING WARNING BANNER      */}
         {/* ------------------------------------------------------------- */}
         {!hasValidFcGps && (
-          <div className="absolute top-14 left-1/2 -translate-x-1/2 z-[450] bg-slate-900/95 border border-amber-500/80 text-amber-200 px-4 py-2 rounded-xl text-xs flex items-center space-x-2.5 shadow-2xl backdrop-blur-md font-mono animate-pulse">
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[450] bg-slate-900/95 border border-amber-500/80 text-amber-200 px-4 py-2 rounded-xl text-xs flex items-center space-x-2.5 shadow-2xl backdrop-blur-md font-mono animate-pulse">
             <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
             <span className="font-bold tracking-wide">GPS unavailable — waiting for valid FC coordinates</span>
           </div>
@@ -1368,7 +1989,7 @@ export const GoogleMapGroundStation: React.FC<GoogleMapGroundStationProps> = ({
         {/* ERROR / FEEDBACK FLOATING BANNER                              */}
         {/* ------------------------------------------------------------- */}
         {errorMessage && (
-          <div className="absolute top-26 left-1/2 -translate-x-1/2 z-[500] max-w-md bg-rose-950/90 border border-rose-500 text-rose-200 px-3.5 py-2 rounded-xl text-xs flex items-center space-x-2 shadow-2xl backdrop-blur-md">
+          <div className="absolute top-12 left-1/2 -translate-x-1/2 z-[500] max-w-md bg-rose-950/90 border border-rose-500 text-rose-200 px-3.5 py-2 rounded-xl text-xs flex items-center space-x-2 shadow-2xl backdrop-blur-md">
             <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
             <span className="flex-1 leading-tight">{errorMessage}</span>
             <button
@@ -1785,25 +2406,42 @@ export const GoogleMapGroundStation: React.FC<GoogleMapGroundStationProps> = ({
 
             <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-1.5 text-xs text-slate-300">
               <div className="flex justify-between">
-                <span className="text-slate-400">Mission Type:</span>
-                <span className="font-bold text-white">{generatedMission?.missionType}</span>
+                <span className="text-slate-400">Outbound:</span>
+                <span className="font-bold text-sky-300">
+                  {customMission ? `${customMission.totalDistance} m` : `${generatedMission?.totalDistance || 0} m`}
+                </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">Waypoints:</span>
-                <span className="font-bold text-white">{generatedMission?.waypoints.length}</span>
+                <span className="text-slate-400">Return:</span>
+                <span className="font-bold text-emerald-400">
+                  {customMission?.returnBehavior === 'SAME_PATH_BACK'
+                    ? 'Same Path Back'
+                    : customMission?.returnBehavior === 'CUSTOM_RETURN_PATH'
+                    ? 'Custom Return Path'
+                    : customMission?.returnBehavior === 'LAND_AT_HOME'
+                    ? 'Land at Home'
+                    : 'Direct RTL to Home'}
+                </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">Cruise Altitude:</span>
-                <span className="font-bold text-amber-300">{generatedMission?.altitude} meters</span>
+                <span className="text-slate-400">Altitude:</span>
+                <span className="font-bold text-amber-300">{customMission?.altitude || altitude} m</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">Planned Speed:</span>
-                <span className="font-bold text-sky-300">{generatedMission?.speed} m/s</span>
+                <span className="text-slate-400">Speed:</span>
+                <span className="font-bold text-sky-300">{customMission?.speed || speed} m/s</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">Origin / Home:</span>
-                <span className="font-bold text-cyan-300">
-                  {homePoint.latitude.toFixed(5)}, {homePoint.longitude.toFixed(5)}
+                <span className="text-slate-400">Estimated Mission:</span>
+                <span className="font-bold text-white">
+                  {Math.floor((customMission?.estimatedDuration || generatedMission?.estimatedDuration || 0) / 60)}:
+                  {String((customMission?.estimatedDuration || generatedMission?.estimatedDuration || 0) % 60).padStart(2, '0')}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Maximum Allowed:</span>
+                <span className="font-bold text-amber-400">
+                  {Math.floor(missionEngine.getMissionDurationSeconds() / 60)}:00
                 </span>
               </div>
             </div>
@@ -1832,6 +2470,68 @@ export const GoogleMapGroundStation: React.FC<GoogleMapGroundStationProps> = ({
         </div>
       )}
 
+      {/* Requirement 7: Dedicated Phone GPS Information Panel when Phone Marker is selected */}
+      {showPhoneGpsInfoPanel && phoneGps.status === 'CONNECTED' && phoneGps.latitude !== null && phoneGps.longitude !== null && (
+        <div className="absolute bottom-4 left-4 z-[480] bg-slate-950/95 border border-cyan-500/70 rounded-xl p-3 shadow-2xl backdrop-blur-md max-w-xs w-full text-xs font-mono space-y-2 animate-in fade-in slide-in-from-bottom-2 select-none">
+          <div className="flex items-center justify-between border-b border-cyan-800/80 pb-1.5">
+            <div className="flex items-center space-x-1.5 text-cyan-300 font-black">
+              <Smartphone className="w-3.5 h-3.5 text-cyan-400" />
+              <span>PHONE GPS (OPERATOR)</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowPhoneGpsInfoPanel(false)}
+              className="text-slate-400 hover:text-white p-0.5 rounded cursor-pointer"
+              title="Close panel"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          <div className="space-y-1 text-slate-200">
+            <div className="flex justify-between">
+              <span className="text-slate-400 text-[10px]">Latitude:</span>
+              <span className="font-bold">{phoneGps.latitude.toFixed(6)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400 text-[10px]">Longitude:</span>
+              <span className="font-bold">{phoneGps.longitude.toFixed(6)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400 text-[10px]">Accuracy:</span>
+              <span className="font-bold text-emerald-400">±{phoneGps.accuracy ? phoneGps.accuracy.toFixed(1) : '--'} m</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400 text-[10px]">Altitude:</span>
+              <span className="font-bold text-amber-300">
+                {phoneGps.altitude !== null ? `${phoneGps.altitude.toFixed(1)} m MSL` : 'N/A'}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400 text-[10px]">Heading:</span>
+              <span className="font-bold text-sky-300">
+                {phoneGps.heading !== null ? `${Math.round(phoneGps.heading)}°` : 'N/A'}
+              </span>
+            </div>
+          </div>
+
+          <div className="pt-1.5 border-t border-slate-800/80 flex items-center justify-between text-[10px]">
+            <span className="text-cyan-400/90 font-bold">
+              {phoneGps.useAsReference ? '✓ Reference Active' : 'Reference Inactive'}
+            </span>
+            <button
+              type="button"
+              onClick={handleRecenterPhone}
+              className="text-cyan-300 hover:text-white flex items-center space-x-1 cursor-pointer font-bold"
+            >
+              <Crosshair className="w-3 h-3" />
+              <span>Center</span>
+            </button>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 };
+

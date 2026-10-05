@@ -15,11 +15,36 @@ let rxBytesTotal = 0;
 let txBytesTotal = 0;
 let packetsForwarded = 0;
 
-// Create HTTP server for health checks & WebSocket upgrades
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const DIST_DIR = path.resolve(__dirname, '../dist');
+
+const MIME_TYPES = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'application/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.map': 'application/json'
+};
+
+// Create HTTP server for static SPA assets, health checks & WebSocket upgrades
 const server = http.createServer((req, res) => {
   const parsedUrl = parse(req.url, true);
-  
-  if (parsedUrl.pathname === '/' || parsedUrl.pathname === '/health') {
+  const pathname = parsedUrl.pathname || '/';
+
+  // 1. Health status endpoint for telemetry / monitoring
+  if (pathname === '/health' || pathname === '/api/health') {
     res.writeHead(200, {
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': '*'
@@ -35,6 +60,60 @@ const server = http.createServer((req, res) => {
       rxBytesTotal,
       txBytesTotal,
       packetsForwarded
+    }, null, 2));
+    return;
+  }
+
+  // 2. Static Asset Serving from dist/ (Requirements 1, 2, 3)
+  if (fs.existsSync(DIST_DIR)) {
+    let filePath = path.join(DIST_DIR, pathname);
+    
+    // Safety check against path traversal
+    if (!filePath.startsWith(DIST_DIR)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+      res.end('Forbidden');
+      return;
+    }
+
+    // If request is for a file that exists directly
+    if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+      const ext = path.extname(filePath).toLowerCase();
+      const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+      const isImmutableAsset = pathname.startsWith('/assets/');
+
+      res.writeHead(200, {
+        'Content-Type': contentType,
+        'Cache-Control': isImmutableAsset ? 'public, max-age=31536000, immutable' : 'no-cache',
+        'X-Content-Type-Options': 'nosniff'
+      });
+      fs.createReadStream(filePath).pipe(res);
+      return;
+    }
+
+    // SPA Fallback: Any route without a file extension serves index.html locally
+    const indexPath = path.join(DIST_DIR, 'index.html');
+    if (fs.existsSync(indexPath)) {
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-cache',
+        'X-Frame-Options': 'SAMEORIGIN'
+      });
+      fs.createReadStream(indexPath).pipe(res);
+      return;
+    }
+  }
+
+  // Fallback if dist hasn't been built yet
+  if (pathname === '/') {
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*'
+    });
+    res.end(JSON.stringify({
+      service: 'SAE INDIA MAVLink Secure WSS Relay',
+      status: 'ok',
+      message: 'Relay online. Build frontend with `npm run build` to serve SPA statically.',
+      uptime: process.uptime()
     }, null, 2));
     return;
   }

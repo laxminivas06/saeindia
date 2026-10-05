@@ -696,7 +696,7 @@ public class UsbSerialPlugin extends Plugin {
             JSObject ifaceObj = new JSObject();
             ifaceObj.put("id", iface.getId());
             ifaceObj.put("interfaceClass", iface.getInterfaceClass());
-            ifaceObj.put("interfaceSubclass", iface.getInterfaceSubClass());
+            ifaceObj.put("interfaceSubclass", iface.getInterfaceSubclass());
             ifaceObj.put("interfaceProtocol", iface.getInterfaceProtocol());
             ifaceObj.put("endpointCount", iface.getEndpointCount());
             interfacesArray.put(ifaceObj);

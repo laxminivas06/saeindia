@@ -87,7 +87,7 @@ export const SerialDiagnosticsModal: React.FC<SerialDiagnosticsModalProps> = ({
   const handleConnect = async () => {
     setIsActionInProgress(true);
     try {
-      if (isEsp32) {
+      if (isEsp32 || activeTab === 'esp32') {
         await mavlinkService.connectEsp32();
       } else {
         await mavlinkService.connectHardware(selectedBaud);

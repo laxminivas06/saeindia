@@ -1,42 +1,37 @@
 import React, { useState, useEffect } from 'react';
-import { DroneTelemetry, HomePoint, MissionState, PreFlightChecklist as ChecklistType } from '../../types/mission';
+import {
+  DroneTelemetry,
+  HomePoint,
+  MissionState,
+  PreFlightChecklist as ChecklistType,
+  AutonomousMissionConfig,
+  TargetBoxDetection,
+  DecodedQRData,
+  LatLngPoint
+} from '../../types/mission';
 import { PixhawkConnectionState } from '../../types/mavlink';
 import { RunnerLinkState } from '../../types/runner';
-import { mavlinkService } from '../../services/mavlinkService';
-import { MissionTimer } from '../common/MissionTimer';
-import { TelemetryHUD } from '../common/TelemetryHUD';
-import { StatusBadge } from '../common/StatusBadge';
-import { HomePointSetter } from './HomePointSetter';
-import { PreArmChecksPanel } from '../common/PreArmChecksPanel';
-import { ControlModePanel } from '../common/ControlModePanel';
-import { TacticalMap } from './TacticalMap';
-import { GoogleMapGroundStation } from './GoogleMapGroundStation';
-import { LiveVideoFeed } from './LiveVideoFeed';
-import { ConnectionStatusDeck } from '../common/ConnectionStatusDeck';
-import { PixhawkConnectionCard } from '../Drone/PixhawkConnectionCard';
 import { missionEngine } from '../../services/missionEngine';
-import { AutonomousMissionStatusBar } from '../Mission/AutonomousMissionStatusBar';
-import { AutonomousMissionConfigModal } from '../Mission/AutonomousMissionConfigModal';
-import { LoiterTestMissionCard } from '../Mission/LoiterTestMissionCard';
-import { CircleTestMissionCard } from '../Mission/CircleTestMissionCard';
-import {
-  Play,
-  ShieldAlert,
-  Power,
-  Loader2,
-  AlertTriangle,
-  Sliders,
-  Cpu,
-  ChevronDown,
-  ChevronUp,
-  Clock,
-  Settings,
-  MapPin,
-  Map as MapIcon,
-  Columns,
-  Video as VideoIcon,
-  X
-} from 'lucide-react';
+import { boxDetectionService } from '../../services/boxDetectionService';
+import { visionService } from '../../services/visionService';
+import { ipCameraService, IpCameraStatus } from '../../services/ipCameraService';
+import { mavlinkService } from '../../services/mavlinkService';
+import { GroundStationOperationsBar, SystemDetectionStatus } from './GroundStationOperationsBar';
+import { IndependentConnectionStatusBar } from '../common/IndependentConnectionStatusBar';
+import { MissionConfigurationCard } from './MissionConfigurationCard';
+import { MissionSafetyCard } from './MissionSafetyCard';
+import { ReturnBehaviorCard } from './ReturnBehaviorCard';
+import { CompactHomePointCard } from './CompactHomePointCard';
+import { GoogleMapGroundStation } from './GoogleMapGroundStation';
+import { RouteSummaryCard } from './RouteSummaryCard';
+import { FlightControllerCard } from './FlightControllerCard';
+import { MissionStatusCard } from './MissionStatusCard';
+import { VisionStatusCard } from './VisionStatusCard';
+import { CollapsibleEventLog } from './CollapsibleEventLog';
+import { LiveVideoFeed } from './LiveVideoFeed';
+import { customRouteService } from '../../services/customRouteService';
+import { ReturnBehavior, GroundStationMission } from '../../types/groundStationMap';
+import { Sliders } from 'lucide-react';
 
 interface GroundStationDashboardProps {
   telemetry: DroneTelemetry;
@@ -69,555 +64,330 @@ export const GroundStationDashboard: React.FC<GroundStationDashboardProps> = ({
   onEmergencyRTL,
   onSwitchToManual
 }) => {
-  const [isArming, setIsArming] = useState(false);
-  const [isDisarming, setIsDisarming] = useState(false);
-  const [armFeedback, setArmFeedback] = useState<string | null>(null);
-  const [showHardware, setShowHardware] = useState(false);
-  const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
-  const [forceBypassChecks, setForceBypassChecks] = useState<boolean>(() => missionEngine.getForceBypassChecks());
-  const [workspaceView, setWorkspaceView] = useState<'MAP' | 'SPLIT' | 'VIDEO'>('MAP');
-  const [isPipVideoVisible, setIsPipVideoVisible] = useState<boolean>(true);
-
-  const missionValidation = missionEngine.validateMission();
-  const missionConfig = missionEngine.getMissionConfig();
-
-  const configuredSecs = missionEngine.getMissionDurationSeconds();
-  const [selectedDuration, setSelectedDuration] = useState<number>(configuredSecs);
-  const [isCustom, setIsCustom] = useState<boolean>(![60, 120, 180, 300, 600].includes(configuredSecs));
-  const [customMinutes, setCustomMinutes] = useState<string>(
-    ![60, 120, 180, 300, 600].includes(configuredSecs) ? String(Math.round(configuredSecs / 60) || 1) : '4'
+  // State
+  const [missionConfig, setMissionConfig] = useState<AutonomousMissionConfig>(() =>
+    missionEngine.getMissionConfig()
   );
+  const [forceBypassChecks, setForceBypassChecks] = useState<boolean>(() =>
+    missionEngine.getForceBypassChecks()
+  );
+  const [boxDetection, setBoxDetection] = useState<TargetBoxDetection>(() =>
+    boxDetectionService.getLatestBox()
+  );
+  const [decodedQR, setDecodedQR] = useState<DecodedQRData | null>(() =>
+    missionEngine.getDecodedQR()
+  );
+  const [targetLocation, setTargetLocation] = useState<LatLngPoint | null>(null);
+
+  // IP Camera & Scanner state
+  const [isIpCameraOn, setIsIpCameraOn] = useState<boolean>(() =>
+    ipCameraService.isIpCameraEnabled()
+  );
+  const [cameraStatus, setCameraStatus] = useState<IpCameraStatus>(() =>
+    ipCameraService.getStatus()
+  );
+  const [streamUrl, setStreamUrl] = useState<string>(() =>
+    ipCameraService.getStreamUrl()
+  );
+  const [isScannerOn, setIsScannerOn] = useState<boolean>(() =>
+    ipCameraService.isScannerEnabled()
+  );
+
+  // Custom Flight Route State
+  const [returnBehavior, setReturnBehavior] = useState<ReturnBehavior>(() =>
+    customRouteService.getReturnBehavior()
+  );
+  const [customMission, setCustomMission] = useState<GroundStationMission | null>(() =>
+    customRouteService.getCurrentMission()
+  );
+  const [isDrawingRoute, setIsDrawingRoute] = useState<boolean>(false);
+  const [isDrawingReturn, setIsDrawingReturn] = useState<boolean>(false);
+
+  // Subscriptions to Box & QR detection, custom route mission, and IP Camera service
+  useEffect(() => {
+    const unsubMission = customRouteService.subscribeMission((m) => {
+      setCustomMission(m);
+    });
+
+    const unsubBox = boxDetectionService.subscribeBox((box) => {
+      setBoxDetection(box);
+      if (box.isDetected && telemetry.latitude && telemetry.longitude) {
+        setTargetLocation({ lat: telemetry.latitude, lng: telemetry.longitude });
+      }
+    });
+
+    const unsubQR = visionService.subscribeQR((qr) => {
+      setDecodedQR(qr);
+      if (qr && qr.code && telemetry.latitude && telemetry.longitude) {
+        setTargetLocation({ lat: telemetry.latitude, lng: telemetry.longitude });
+      }
+    });
+
+    const unsubCamToggle = ipCameraService.subscribeToggle(setIsIpCameraOn);
+    const unsubCamStatus = ipCameraService.subscribeStatus(setCameraStatus);
+    const unsubCamUrl = ipCameraService.subscribeUrl(setStreamUrl);
+    const unsubScanner = ipCameraService.subscribeScanner(setIsScannerOn);
+
+    return () => {
+      unsubMission();
+      unsubBox();
+      unsubQR();
+      unsubCamToggle();
+      unsubCamStatus();
+      unsubCamUrl();
+      unsubScanner();
+    };
+  }, [telemetry.latitude, telemetry.longitude]);
+
+  const handleUpdateMissionConfig = (partial: Partial<AutonomousMissionConfig>) => {
+    missionEngine.updateMissionConfig(partial);
+    setMissionConfig(missionEngine.getMissionConfig());
+  };
+
+  const handleReturnBehaviorChange = (behavior: ReturnBehavior) => {
+    setReturnBehavior(behavior);
+    customRouteService.setReturnBehavior(behavior);
+  };
 
   const isMissionActive =
     missionState !== 'IDLE' &&
     missionState !== 'HOME_SET' &&
     missionState !== 'READY' &&
-    missionState !== 'MISSION_COMPLETE';
+    missionState !== 'MISSION_COMPLETE' &&
+    missionState !== 'ABORTED';
 
-  const handleDurationChange = (seconds: number) => {
-    if (isMissionActive) return;
-    setSelectedDuration(seconds);
-    setIsCustom(false);
-    missionEngine.setMissionDuration(seconds);
+  const handleStartMissionClick = () => {
+    missionEngine.startMission(forceBypassChecks);
+    onStartMission();
   };
 
-  const handleCustomMinutesChange = (val: string) => {
-    setCustomMinutes(val);
-    const num = parseFloat(val);
-    if (!isNaN(num) && num > 0) {
-      const secs = Math.round(num * 60);
-      setSelectedDuration(secs);
-      missionEngine.setMissionDuration(secs);
-    }
+  const handleStopAbortMissionClick = () => {
+    missionEngine.abortMission('Manual Operator Stop / Abort');
   };
 
-  const isDroneAirborne = telemetry.isArmed && telemetry.altitude > 1.0;
-  const isArmed = telemetry.isArmed;
-
-  useEffect(() => {
-    if (isArmed) { setIsArming(false); setArmFeedback(null); }
-    else { setIsDisarming(false); }
-  }, [isArmed]);
-
-  const handleDedicatedArmClick = async () => {
-    if (!pixhawkState.isConnected) { setArmFeedback('Flight controller not connected. Connect first.'); return; }
-    setArmFeedback(null);
-    setIsArming(true);
-    const sent = await mavlinkService.sendArmCommand();
-    if (!sent) { setIsArming(false); setArmFeedback('ARM TRANSMISSION FAILED: Check WebSocket / ESP32 TX Link.'); return; }
-    const startWait = Date.now();
-    const watchdog = setInterval(() => {
-      if (mavlinkService.getTelemetry().isArmed) {
-        setIsArming(false); setArmFeedback(null); clearInterval(watchdog);
-      } else {
-        const s = mavlinkService.getConnectionState();
-        const lastAck = s.lastArmCommandAck || s.lastCommandAck;
-        if (lastAck && lastAck.command === 400 && lastAck.result !== 0) {
-          setIsArming(false); clearInterval(watchdog);
-          const reason = s.preArmFailReason || (s.statusHistory?.length ? s.statusHistory[0].text : undefined);
-          let msg = `ARM REJECTED by Pixhawk (${lastAck.resultName || 'FAILED'})`;
-          if (reason) msg += ` — ${reason}`;
-          setArmFeedback(msg); return;
-        }
-        if (Date.now() - startWait > 4500) {
-          setIsArming(false); clearInterval(watchdog);
-          setArmFeedback(s.preArmFailReason ? `ARM REJECTED: ${s.preArmFailReason}` : 'ARM ACK TIMEOUT');
-        }
-      }
-    }, 200);
+  const handleArmClick = async () => {
+    await mavlinkService.sendArmCommand(forceBypassChecks);
   };
 
-  const handleDedicatedDisarmClick = async () => {
-    if (!pixhawkState.isConnected) { setArmFeedback('Flight controller not connected. Connect first.'); return; }
-    setArmFeedback(null);
-    setIsDisarming(true);
-    const sent = await mavlinkService.sendDisarmCommand();
-    if (!sent) { setIsDisarming(false); setArmFeedback('Disarm command transmission failed.'); return; }
-    const startWait = Date.now();
-    const watchdog = setInterval(() => {
-      if (!mavlinkService.getTelemetry().isArmed) { setIsDisarming(false); setArmFeedback(null); clearInterval(watchdog); }
-      else if (Date.now() - startWait > 4500) { setIsDisarming(false); clearInterval(watchdog); }
-    }, 250);
+  const handleDisarmClick = async () => {
+    await mavlinkService.sendDisarmCommand();
   };
+
+  // Compute Simplified Automatic Detection Status (Requirement 4)
+  const isConnected =
+    pixhawkState.isConnected || pixhawkState.isUsbConnected || pixhawkState.isRealHardware;
+
+  const isDetecting =
+    isScannerOn &&
+    (missionState === 'SEARCHING' ||
+      missionState === 'OBJECT_DETECTED' ||
+      missionState === 'BOX_DETECTED' ||
+      missionState === 'INSPECTING' ||
+      missionState === 'QR_SCANNING' ||
+      Boolean(boxDetection?.isDetected) ||
+      Boolean(decodedQR?.code));
+
+  let detectionStatus: SystemDetectionStatus = 'DISCONNECTED';
+  if (isMissionActive) {
+    detectionStatus = 'MISSION_ACTIVE';
+  } else if (isDetecting) {
+    detectionStatus = 'DETECTING';
+  } else if (isReadyForMission || forceBypassChecks) {
+    detectionStatus = 'SYSTEM_READY';
+  } else if (isConnected) {
+    detectionStatus = 'CONNECTED';
+  } else {
+    detectionStatus = 'DISCONNECTED';
+  }
 
   return (
-    <div className="p-3 sm:p-5 max-w-7xl mx-auto space-y-4 sm:space-y-5 font-mono select-none">
+    <div className="p-3 sm:p-5 max-w-7xl mx-auto space-y-3.5 sm:space-y-4 font-mono select-none">
+      {/* ============================================================ */}
+      {/* 0. INDEPENDENT CONNECTION STATUS BAR (Requirement 12)       */}
+      {/* Decoupled: GS, Phone GPS, ESP32, Pixhawk, IP Camera status   */}
+      {/* ============================================================ */}
+      <IndependentConnectionStatusBar pixhawkState={pixhawkState} />
 
       {/* ============================================================ */}
-      {/* 1. CONNECTION STATUS DECK (7 independent states)             */}
+      {/* 1. OPERATIONS BAR: IP Camera -> Scanner -> Status -> Timer  */}
       {/* ============================================================ */}
-      <ConnectionStatusDeck
-        pixhawkState={pixhawkState}
-        runnerLink={runnerLink}
-        telemetry={telemetry}
+      <GroundStationOperationsBar
+        isIpCameraOn={isIpCameraOn}
+        onToggleIpCamera={(on) => ipCameraService.setIpCameraEnabled(on)}
+        isScannerOn={isScannerOn}
+        onToggleScanner={(on) => ipCameraService.setScannerEnabled(on)}
+        cameraStatus={cameraStatus}
+        streamUrl={streamUrl}
+        onUpdateStreamUrl={(url) => ipCameraService.setStreamUrl(url)}
+        detectionStatus={detectionStatus}
+        elapsedSeconds={elapsedSeconds}
+        isMissionActive={isMissionActive}
+        decodedQR={decodedQR}
+        boxDetected={boxDetection?.isDetected}
+        isArmed={telemetry.isArmed}
+        isFcConnected={isConnected}
+        isDroneGpsLocked={Boolean(telemetry.gps?.isLocked)}
+        droneSatellites={telemetry.gps?.satellites || 0}
+        isReadyForMission={isReadyForMission || forceBypassChecks}
+        onArm={handleArmClick}
+        onDisarm={handleDisarmClick}
+        onStartMission={handleStartMissionClick}
+        onStopMission={handleStopAbortMissionClick}
       />
 
       {/* ============================================================ */}
-      {/* 2. ESP32 / PIXHAWK CONNECTION CARD (always visible)          */}
+      {/* 2. PRIMARY WORKSPACE: MAP & ESSENTIAL MISSION CONTROLS       */}
+      {/* When IP Camera is ON, designated video feed appears cleanly */}
+      {/* Responsive: split column on desktop, stacked on mobile/tab   */}
       {/* ============================================================ */}
-      <PixhawkConnectionCard connectionState={pixhawkState} />
-
-      {/* ============================================================ */}
-      {/* 2.5 RESPONSIVE AUTONOMOUS MISSION STATUS BAR (Requirement 7) */}
-      {/* ============================================================ */}
-      <AutonomousMissionStatusBar
-        telemetry={telemetry}
-        missionState={missionState}
-        pixhawkState={pixhawkState}
-        onOpenConfig={() => setIsConfigModalOpen(true)}
-        isAuthorizedOperator={true}
-      />
-
-      {/* ============================================================ */}
-      {/* 3. PRIMARY GOOGLE MAPS GROUND STATION WORKSPACE             */}
-      {/* ============================================================ */}
-      <div className="space-y-2.5">
-        {/* Workspace Mode Switcher (Google Map Focused, Split, Video Stream) */}
-        <div className="flex items-center justify-between flex-wrap gap-2 px-1">
-          <div className="flex items-center space-x-1.5 bg-slate-900/90 p-1 rounded-xl border border-slate-800 text-[11px] font-bold">
-            <button
-              type="button"
-              onClick={() => setWorkspaceView('MAP')}
-              className={`px-3 py-1.5 rounded-lg flex items-center space-x-1.5 transition cursor-pointer ${
-                workspaceView === 'MAP'
-                  ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
-              }`}
-            >
-              <MapIcon className="w-3.5 h-3.5" />
-              <span>GOOGLE MAP WORKSPACE (PRIMARY)</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setWorkspaceView('SPLIT')}
-              className={`px-3 py-1.5 rounded-lg flex items-center space-x-1.5 transition cursor-pointer ${
-                workspaceView === 'SPLIT'
-                  ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
-              }`}
-            >
-              <Columns className="w-3.5 h-3.5" />
-              <span>SPLIT VIEW</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setWorkspaceView('VIDEO')}
-              className={`px-3 py-1.5 rounded-lg flex items-center space-x-1.5 transition cursor-pointer ${
-                workspaceView === 'VIDEO'
-                  ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
-              }`}
-            >
-              <VideoIcon className="w-3.5 h-3.5" />
-              <span>VIDEO STREAM</span>
-            </button>
-          </div>
-
-          <div className="hidden sm:flex items-center space-x-2 text-[11px] text-slate-400 font-bold">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span>Map Workspace Active • Google Maps Engine</span>
-          </div>
-        </div>
-
-        {/* View Layouts */}
-        {workspaceView === 'MAP' && (
-          <div className="relative">
-            <GoogleMapGroundStation
-              telemetry={telemetry}
-              homePoint={homePoint}
-              pixhawkState={pixhawkState}
-              missionState={missionState}
-              onSetHomePoint={onSetHomePoint}
-              onStartMission={onStartMission}
-              onEmergencyRTL={onEmergencyRTL}
-              isPipVideoVisible={isPipVideoVisible}
-              onTogglePipVideo={() => setIsPipVideoVisible(!isPipVideoVisible)}
-            />
-
-            {/* Floating Picture-in-Picture Live Video Feed Overlay */}
-            {isPipVideoVisible && (
-              <div className="absolute bottom-6 left-16 z-[450] w-64 sm:w-80 shadow-2xl rounded-2xl overflow-hidden border border-sky-500/60 bg-slate-950/95 backdrop-blur-md animate-in fade-in zoom-in-95">
-                <div className="flex items-center justify-between px-3 py-1.5 bg-slate-900 border-b border-slate-800 text-[10px] font-black uppercase text-sky-300">
-                  <div className="flex items-center space-x-1.5">
-                    <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
-                    <span>LIVE DRONE OPTICAL FEED (PIP)</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setIsPipVideoVisible(false)}
-                    className="p-1 text-slate-400 hover:text-white cursor-pointer"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-                <LiveVideoFeed className="h-[180px] sm:h-[220px]" />
-              </div>
-            )}
-          </div>
-        )}
-
-        {workspaceView === 'SPLIT' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <LiveVideoFeed className="h-[450px] sm:h-[550px] lg:h-[650px]" />
-            <GoogleMapGroundStation
-              telemetry={telemetry}
-              homePoint={homePoint}
-              pixhawkState={pixhawkState}
-              missionState={missionState}
-              onSetHomePoint={onSetHomePoint}
-              onStartMission={onStartMission}
-              onEmergencyRTL={onEmergencyRTL}
-              className="h-[450px] sm:h-[550px] lg:h-[650px]"
-            />
-          </div>
-        )}
-
-        {workspaceView === 'VIDEO' && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-            <div className="lg:col-span-8">
-              <LiveVideoFeed className="h-[500px] sm:h-[600px]" />
-            </div>
-            <div className="lg:col-span-4">
-              <GoogleMapGroundStation
-                telemetry={telemetry}
-                homePoint={homePoint}
-                pixhawkState={pixhawkState}
-                missionState={missionState}
-                onSetHomePoint={onSetHomePoint}
-                onStartMission={onStartMission}
-                onEmergencyRTL={onEmergencyRTL}
-                className="h-[500px] sm:h-[600px]"
-              />
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* ============================================================ */}
-      {/* 4. STATUS STRIP + MANUAL OVERRIDE ACCESS                     */}
-      {/* ============================================================ */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900/90 p-3 sm:p-4 rounded-xl border border-slate-800">
-        <div className="space-y-1">
-          <div className="text-[11px] text-slate-400 font-bold uppercase tracking-wider flex items-center space-x-1.5">
-            <span>GROUND STATION ANDROID CONTROLLER</span>
-            <span className="text-slate-500">•</span>
-            <span className={`px-2 py-0.5 rounded text-[10px] font-black border flex items-center space-x-1 ${
-              isDroneAirborne
-                ? 'bg-emerald-950/80 border-emerald-400 text-emerald-300 animate-pulse'
-                : telemetry.isArmed
-                ? 'bg-amber-950/80 border-amber-400 text-amber-300'
-                : 'bg-slate-800 border-slate-700 text-slate-400'
-            }`}>
-              <Power className="w-3 h-3" />
-              <span>{isDroneAirborne ? 'AIRBORNE (AUTO)' : telemetry.isArmed ? 'ARMED ON GROUND' : 'DISARMED'}</span>
-            </span>
-          </div>
-          <StatusBadge state={missionState} size="lg" />
-        </div>
-        {onSwitchToManual && (
-          <button
-            onClick={onSwitchToManual}
-            className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-rose-950/80 text-rose-300 border border-slate-700 hover:border-rose-500/50 text-xs font-bold uppercase flex items-center space-x-2 transition self-start sm:self-auto cursor-pointer"
-          >
-            <Sliders className="w-4 h-4 text-rose-400" />
-            <span>MANUAL OVERRIDE</span>
-          </button>
-        )}
-      </div>
-
-      {/* ============================================================ */}
-      {/* 5. TELEMETRY HUD                                              */}
-      {/* ============================================================ */}
-      <TelemetryHUD telemetry={telemetry} />
-
-      {/* ============================================================ */}
-      {/* 6. CONTROLS: MISSION + PREFLIGHT + FLIGHT CONTROLS           */}
-      {/* ============================================================ */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-        {/* Left: Mission Controls */}
-        <div className="lg:col-span-6 space-y-4">
-          {/* ============================================================ */}
-          {/* AUTONOMOUS MISSION CONFIGURATION QUICK CARD (Prompt 1 Specs) */}
-          {/* ============================================================ */}
-          <div className="bg-slate-900/90 p-3.5 sm:p-4 rounded-xl border border-amber-500/30 hud-border font-mono space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse" />
-                <span className="text-xs font-black uppercase text-amber-300 tracking-wider">
-                  AUTONOMOUS MISSION CONFIGURATION
-                </span>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setIsConfigModalOpen(true)}
-                className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-black uppercase tracking-wider flex items-center space-x-1 cursor-pointer transition shadow-sm shadow-amber-600/30"
-              >
-                <Settings className="w-3 h-3" />
-                <span>CONFIGURE</span>
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
-                <div className="text-[10px] text-slate-400 uppercase font-bold">Search Altitude</div>
-                <div className="font-extrabold text-amber-300 text-sm mt-0.5">
-                  [ {missionConfig.searchAltitude} m ]
-                </div>
-              </div>
-
-              <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
-                <div className="text-[10px] text-slate-400 uppercase font-bold">Search Area</div>
-                <div className="font-extrabold text-sky-300 text-xs mt-0.5 truncate">
-                  [ {missionConfig.searchBoundary.type} ]
-                </div>
-              </div>
-
-              <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
-                <div className="text-[10px] text-slate-400 uppercase font-bold">Search Algorithm</div>
-                <div className="font-extrabold text-slate-200 text-xs mt-0.5 truncate">
-                  [ {missionConfig.searchAlgorithm.replace('_', ' ')} ]
-                </div>
-              </div>
-
-              <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
-                <div className="text-[10px] text-slate-400 uppercase font-bold">RTL on QR Confirmation</div>
-                <div className={`font-extrabold text-xs mt-0.5 ${missionConfig.rtlOnQrConfirmation ? 'text-emerald-400' : 'text-amber-400'}`}>
-                  [ {missionConfig.rtlOnQrConfirmation ? 'ON' : 'OFF'} ]
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between text-[11px] pt-1 border-t border-slate-800/80">
-              <span className="text-slate-400">Pre-Flight Readiness:</span>
-              <span className={`font-bold flex items-center space-x-1 ${
-                missionValidation.isValid ? 'text-emerald-400' : 'text-amber-400'
-              }`}>
-                <span>{missionValidation.conditions.filter(c => c.passed).length}/9 Checks Passed</span>
-              </span>
-            </div>
-          </div>
-
-          {/* ============================================================ */}
-          {/* 5M LOITER TEST MISSION CONFIGURATION (Controlled Test)       */}
-          {/* ============================================================ */}
-          <LoiterTestMissionCard
-            telemetry={telemetry}
-            homePoint={homePoint}
-            pixhawkState={pixhawkState}
-          />
-
-          {/* ============================================================ */}
-          {/* AUTONOMOUS CIRCLE TEST MISSION (Configurable Diameter & Alt) */}
-          {/* ============================================================ */}
-          <CircleTestMissionCard
-            telemetry={telemetry}
-            homePoint={homePoint}
-            pixhawkState={pixhawkState}
-          />
-
-          {/* Mission Duration Configuration (Operator/Admin) */}
-          <div className="bg-slate-900/90 p-3 sm:p-3.5 rounded-xl border border-slate-800 hud-border font-mono space-y-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2">
-                <Clock className="w-3.5 h-3.5 text-sky-400" />
-                <span className="text-[11px] font-black uppercase text-slate-300 tracking-wider">
-                  MISSION DURATION CONFIG
-                </span>
-              </div>
-              <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-                isMissionActive ? 'bg-amber-950/80 text-amber-300 border border-amber-500/40' : 'bg-slate-800 text-sky-400'
-              }`}>
-                {isMissionActive ? 'LOCKED IN FLIGHT' : `ACTIVE: ${Math.round(selectedDuration / 60)}M (${selectedDuration}s)`}
-              </span>
-            </div>
-
-            {/* Presets Grid */}
-            <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
-              {[
-                { label: '1 MIN', secs: 60 },
-                { label: '2 MIN', secs: 120 },
-                { label: '3 MIN (DEF)', secs: 180 },
-                { label: '5 MIN', secs: 300 },
-                { label: '10 MIN', secs: 600 },
-                { label: 'CUSTOM', secs: -1, isCustomOption: true },
-              ].map((opt) => {
-                const isSelected = opt.isCustomOption ? isCustom : (!isCustom && selectedDuration === opt.secs);
-                return (
-                  <button
-                    key={opt.label}
-                    type="button"
-                    disabled={isMissionActive}
-                    onClick={() => {
-                      if (opt.isCustomOption) {
-                        setIsCustom(true);
-                      } else {
-                        handleDurationChange(opt.secs);
-                      }
-                    }}
-                    className={`py-1.5 px-1 rounded-lg text-[10px] font-extrabold uppercase transition border text-center ${
-                      isSelected
-                        ? 'bg-sky-600 border-sky-400 text-white shadow-md shadow-sky-600/30 font-black'
-                        : 'bg-slate-950/80 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
-                    } ${isMissionActive ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-                  >
-                    {opt.label}
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Custom Input */}
-            {isCustom && !isMissionActive && (
-              <div className="flex items-center space-x-2 pt-1 border-t border-slate-800/80">
-                <span className="text-[10px] text-slate-400 uppercase font-bold">Custom Window:</span>
-                <div className="flex items-center space-x-1.5">
-                  <input
-                    type="number"
-                    min="1"
-                    max="60"
-                    step="1"
-                    value={customMinutes}
-                    onChange={(e) => handleCustomMinutesChange(e.target.value)}
-                    className="w-16 bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-white font-mono text-center focus:border-sky-500 focus:outline-none"
-                    placeholder="Mins"
-                  />
-                  <span className="text-[10px] text-slate-400">Minutes ({Math.round((parseFloat(customMinutes) || 1) * 60)}s)</span>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <MissionTimer
-            remainingSeconds={remainingSeconds}
-            elapsedSeconds={elapsedSeconds}
-            missionState={missionState}
-          />
-
-          {/* "No problem, Start Mission" Checkbox (Bypasses Pre-Arm & Validation Blocks) */}
-          <div className="mb-2">
-            <label className={`flex items-center space-x-2.5 text-xs font-semibold select-none cursor-pointer px-3 py-2 rounded-xl transition border ${
-              forceBypassChecks
-                ? 'bg-amber-950/80 border-amber-500/80 text-amber-200 shadow-md shadow-amber-950/40'
-                : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-300'
-            }`}>
-              <input
-                type="checkbox"
-                id="gcs-bypass-prearm-checkbox"
-                checked={forceBypassChecks}
-                onChange={(e) => {
-                  setForceBypassChecks(e.target.checked);
-                  missionEngine.setForceBypassChecks(e.target.checked);
-                }}
-                className="w-4 h-4 rounded text-amber-500 accent-amber-500 focus:ring-0 cursor-pointer"
-              />
-              <span className="flex-1 leading-tight">
-                <span className="font-bold text-amber-300">No problem, Start Mission</span>
-                <span className="block text-[10px] text-slate-400 font-mono">Bypass Pre-Arm checks & errors</span>
-              </span>
-            </label>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <button
-              onClick={() => {
-                missionEngine.startMission(forceBypassChecks);
-                onStartMission();
-              }}
-              disabled={(!missionValidation.isValid && !forceBypassChecks) || isMissionActive}
-              className={`py-3.5 sm:py-4 px-3 rounded-xl font-black text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center space-x-2 transition shadow-lg ${
-                (missionValidation.isValid || forceBypassChecks) && !isMissionActive
-                  ? 'bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white shadow-sky-600/30 cursor-pointer animate-pulse'
-                  : 'bg-slate-800/80 text-slate-500 border border-slate-700/50 cursor-not-allowed'
-              }`}
-              title={
-                forceBypassChecks
-                  ? 'FORCE START: Checks bypassed by user override'
-                  : !missionValidation.isValid
-                  ? 'START DISABLED: Satisfy pre-flight conditions or check "No problem, Start Mission"'
-                  : 'Start Autonomous Mission'
-              }
-            >
-              <Play className="w-4 h-4 fill-current" />
-              <span>START MISSION</span>
-            </button>
-
-            <button
-              onClick={onEmergencyRTL}
-              className="py-3.5 sm:py-4 px-3 rounded-xl font-black text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center space-x-2 bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white shadow-lg shadow-rose-600/30 transition cursor-pointer"
-            >
-              <ShieldAlert className="w-4 h-4" />
-              <span>EMERGENCY RTL</span>
-            </button>
-          </div>
-
-          <HomePointSetter
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
+        {/* Left Column: Map Workspace */}
+        <div className={isIpCameraOn ? 'lg:col-span-8 space-y-3' : 'lg:col-span-8 space-y-3'}>
+          {/* Compact Home Point card */}
+          <CompactHomePointCard
             homePoint={homePoint}
             gps={telemetry.gps}
             onSetHomePoint={onSetHomePoint}
             disabled={isMissionActive}
           />
+
+          {/* Google Map Workspace */}
+          <div className="relative rounded-2xl overflow-hidden border border-slate-800 shadow-2xl bg-slate-950 isolate">
+            <GoogleMapGroundStation
+              telemetry={telemetry}
+              homePoint={homePoint}
+              pixhawkState={pixhawkState}
+              missionState={missionState}
+              onSetHomePoint={onSetHomePoint}
+              onStartMission={handleStartMissionClick}
+              onEmergencyRTL={onEmergencyRTL}
+              onStopAbortMission={handleStopAbortMissionClick}
+              targetLocation={targetLocation}
+              targetLabel={decodedQR?.code ? `QR Code: [${decodedQR.code}]` : 'Box Target Area'}
+              isPipVideoVisible={false}
+              isDrawingRoute={isDrawingRoute}
+              onToggleDrawingRoute={setIsDrawingRoute}
+              isDrawingReturn={isDrawingReturn}
+              onToggleDrawingReturn={setIsDrawingReturn}
+              className="h-[520px] sm:h-[580px] lg:h-[640px]"
+            />
+          </div>
         </div>
 
-        {/* Right: Pre-flight + Arm Controls */}
-        <div className="lg:col-span-6 space-y-4">
-          <PreArmChecksPanel
-            connectionState={pixhawkState}
-            telemetry={telemetry}
-            homePoint={homePoint}
-            isReady={missionValidation.isValid}
-          />
+        {/* Right Column: Designated Video Area (when ON) & Flight Controller Card */}
+        <div className="lg:col-span-4 space-y-4">
+          {/* Designated IP Camera Video Area (Appears immediately when ON, hides cleanly when OFF) */}
+          {isIpCameraOn && (
+            <div className="rounded-2xl overflow-hidden border border-slate-800 shadow-2xl bg-slate-950 animate-in fade-in zoom-in-95 duration-200">
+              <LiveVideoFeed
+                className="h-[220px] sm:h-[260px] w-full"
+                onClose={() => ipCameraService.setIpCameraEnabled(false)}
+              />
+            </div>
+          )}
 
-          <ControlModePanel
+          {/* Essential Mission Controls: Timer, Arm, Disarm, Modes, Alt, Start, Stop */}
+          <FlightControllerCard
             telemetry={telemetry}
-            connectionState={pixhawkState}
-            onArmClick={handleDedicatedArmClick}
-            onDisarmClick={handleDedicatedDisarmClick}
-            isArmingInProgress={isArming}
-            isDisarmingInProgress={isDisarming}
+            pixhawkState={pixhawkState}
+            missionState={missionState}
+            isReadyForMission={isReadyForMission}
+            forceBypassChecks={forceBypassChecks}
+            elapsedSeconds={elapsedSeconds}
+            onStartMission={handleStartMissionClick}
+            onStopAbortMission={handleStopAbortMissionClick}
+            onEmergencyRTL={onEmergencyRTL}
           />
+        </div>
+      </div>
 
-          {armFeedback && !isArmed && (
-            <div className="p-3 bg-rose-950/70 border border-rose-500/50 rounded-xl text-rose-300 text-xs flex items-center space-x-2">
-              <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
-              <span>{armFeedback}</span>
+      {/* ============================================================ */}
+      {/* 3. ROUTE SUMMARY (When user plans / draws waypoints)         */}
+      {/* ============================================================ */}
+      <RouteSummaryCard
+        mission={customMission}
+        onEditRoute={() => {
+          setIsDrawingRoute(true);
+          setIsDrawingReturn(false);
+        }}
+        onClearRoute={() => {
+          customRouteService.clearRoute();
+          setIsDrawingRoute(false);
+          setIsDrawingReturn(false);
+        }}
+        onReverseRoute={() => {
+          customRouteService.reverseRoute();
+        }}
+        onUploadToDrone={async () => {
+          await customRouteService.uploadMission();
+        }}
+        onStartMission={handleStartMissionClick}
+        isMissionActive={isMissionActive}
+      />
+
+      {/* ============================================================ */}
+      {/* 4. RETURN BEHAVIOR & MISSION CONFIGURATION                   */}
+      {/* ============================================================ */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        <div className="lg:col-span-6">
+          <ReturnBehaviorCard
+            returnBehavior={returnBehavior}
+            onChangeReturnBehavior={handleReturnBehaviorChange}
+            onStartDrawReturnRoute={() => {
+              setIsDrawingReturn(true);
+              setIsDrawingRoute(false);
+            }}
+            hasCustomReturnPoints={customRouteService.getReturnPoints().length > 0}
+            isMissionActive={isMissionActive}
+          />
+        </div>
+
+        <div className="lg:col-span-6 flex flex-col justify-between">
+          <MissionSafetyCard isMissionActive={isMissionActive} />
+
+          {onSwitchToManual && (
+            <div className="mt-3 pt-2 flex justify-end">
+              <button
+                type="button"
+                onClick={onSwitchToManual}
+                className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-rose-950/80 text-rose-300 border border-slate-800 hover:border-rose-500/50 text-[11px] font-bold uppercase flex items-center space-x-1.5 transition cursor-pointer"
+              >
+                <Sliders className="w-3.5 h-3.5 text-rose-400" />
+                <span>Manual RC Override</span>
+              </button>
             </div>
           )}
         </div>
       </div>
 
-      {/* Autonomous Mission Configuration Modal */}
-      <AutonomousMissionConfigModal
-        isOpen={isConfigModalOpen}
-        onClose={() => setIsConfigModalOpen(false)}
-        telemetry={telemetry}
-        homePoint={homePoint}
-        pixhawkState={pixhawkState}
-        missionState={missionState}
-        onStartMission={onStartMission}
-      />
+      {/* ============================================================ */}
+      {/* 5. MISSION STATUS & VISION STATUS                            */}
+      {/* ============================================================ */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Mission Status */}
+        <MissionStatusCard
+          missionState={missionState}
+          telemetry={telemetry}
+          elapsedSeconds={elapsedSeconds}
+          remainingSeconds={remainingSeconds}
+          boxDetection={boxDetection}
+          decodedQR={decodedQR}
+        />
+
+        {/* Vision / Target Status */}
+        <VisionStatusCard
+          runnerLink={runnerLink}
+          boxDetection={boxDetection}
+          decodedQR={decodedQR}
+        />
+      </div>
+
+      {/* ============================================================ */}
+      {/* 6. COLLAPSIBLE EVENT LOG                                     */}
+      {/* ============================================================ */}
+      <CollapsibleEventLog />
     </div>
   );
 };
+
+export default GroundStationDashboard;

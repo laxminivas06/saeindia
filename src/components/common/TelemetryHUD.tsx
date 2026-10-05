@@ -90,7 +90,9 @@ export const TelemetryHUD: React.FC<TelemetryHUDProps> = ({
             <Battery className="w-3 h-3 text-amber-400" />
             <span>BATTERY</span>
           </span>
-          <span className="text-[10px] text-slate-500">6S LIPO</span>
+          <span className="text-[10px] text-slate-500">
+            {(telemetry.batteryCellCount || (telemetry.batteryVoltage > 20.0 ? 6 : telemetry.batteryVoltage > 13.2 ? 4 : 3))}S LIPO
+          </span>
         </div>
         <div className="flex items-baseline space-x-1 my-1">
           <span className={`text-2xl sm:text-3xl font-extrabold ${

@@ -6,6 +6,7 @@ interface BatteryMonitorCardProps {
   batteryPercent: number;
   batteryVoltage: number;
   batteryCurrent?: number;
+  batteryCellCount?: number;
   compact?: boolean;
 }
 
@@ -13,24 +14,30 @@ export const BatteryMonitorCard: React.FC<BatteryMonitorCardProps> = ({
   batteryPercent,
   batteryVoltage,
   batteryCurrent = 0,
+  batteryCellCount,
   compact = false
 }) => {
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [showHelp, setShowHelp] = useState<boolean>(false);
 
   const hasSignal = batteryVoltage > 0;
-  const isLow = batteryPercent > 0 && batteryPercent < 20;
-  const isCritical = batteryPercent > 0 && batteryPercent < 15;
 
-  // Determine cell count (3S, 4S, 6S)
-  let cellCount = 4;
-  if (batteryVoltage > 20.0) cellCount = 6;
-  else if (batteryVoltage > 13.0) cellCount = 4;
-  else if (batteryVoltage > 9.0) cellCount = 3;
-  else if (batteryVoltage > 6.0) cellCount = 2;
+  // Determine cell count (prioritize flight controller telemetry, default 3S for this drone)
+  let cellCount = batteryCellCount && batteryCellCount > 0 ? batteryCellCount : 3;
+  if (!batteryCellCount) {
+    if (batteryVoltage > 20.0) cellCount = 6;
+    else if (batteryVoltage > 13.2) cellCount = 4;
+    else if (batteryVoltage > 6.0) cellCount = 3;
+    else if (batteryVoltage > 0) cellCount = 2;
+  }
 
   const cellVolt = hasSignal ? +(batteryVoltage / cellCount).toFixed(2) : 0;
   const powerWatts = hasSignal && batteryCurrent > 0 ? +(batteryVoltage * batteryCurrent).toFixed(1) : 0;
+
+  // Low & critical failsafe state based on percentage AND per-cell voltage for 3S LiPo
+  // 3S LiPo: Critical < 10.5V (3.50V/cell) or < 15%, Low < 11.1V (3.70V/cell) or < 20%
+  const isCritical = (batteryPercent > 0 && batteryPercent < 15) || (hasSignal && cellVolt > 0 && cellVolt < 3.50);
+  const isLow = !isCritical && ((batteryPercent > 0 && batteryPercent < 20) || (hasSignal && cellVolt > 0 && cellVolt < 3.70));
 
   const handleRequestStream = async () => {
     setIsRefreshing(true);
@@ -157,11 +164,51 @@ export const BatteryMonitorCard: React.FC<BatteryMonitorCardProps> = ({
           </div>
         </div>
       ) : (
-        <div className="p-2.5 bg-amber-950/40 border border-amber-600/40 rounded-xl flex items-start space-x-2 text-[11px] text-amber-200">
-          <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-          <div className="leading-snug">
-            <span className="font-bold text-amber-300">No Battery Signal Detected: </span>
-            Ensure your Pixhawk Power Module is connected to the 6-pin POWER port and configured in Mission Planner.
+        <div className="p-3 bg-amber-950/40 border border-amber-600/40 rounded-xl space-y-2.5 text-[11px] text-amber-200">
+          <div className="flex items-start space-x-2">
+            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <div className="leading-snug">
+              <span className="font-bold text-amber-300">
+                {mavlinkService.getConnectionState().isConnected
+                  ? 'Pixhawk Connected — No Battery Stream Received: '
+                  : 'Pixhawk Disconnected (No Telemetry): '}
+              </span>
+              {mavlinkService.getConnectionState().isConnected
+                ? 'ArduPilot requires BATT_MONITOR=4 and SR1_EXT_STAT=4 configured in Mission Planner.'
+                : 'Connect your ESP32 Wi-Fi bridge or USB cable, or launch Simulator mode to test 3S battery UI.'}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2 pt-1 border-t border-amber-900/40">
+            {mavlinkService.getConnectionState().isConnected ? (
+              <button
+                type="button"
+                onClick={handleRequestStream}
+                disabled={isRefreshing}
+                className="px-2.5 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-bold text-[10px] flex items-center space-x-1 cursor-pointer transition shadow"
+              >
+                <RefreshCw className={`w-3 h-3 ${isRefreshing ? 'animate-spin' : ''}`} />
+                <span>PROBE FC BATTERY STREAM</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => mavlinkService.switchToSimulationMode()}
+                className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[10px] flex items-center space-x-1 cursor-pointer transition shadow"
+              >
+                <Zap className="w-3 h-3" />
+                <span>START SIMULATOR (3S 12.6V DEMO)</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setShowHelp(!showHelp)}
+              className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-[10px] flex items-center space-x-1 cursor-pointer transition"
+            >
+              <HelpCircle className="w-3 h-3 text-sky-400" />
+              <span>SETUP GUIDE</span>
+            </button>
           </div>
         </div>
       )}

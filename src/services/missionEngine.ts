@@ -15,6 +15,8 @@ import { visionService } from './visionService';
 import { audioService } from './audioService';
 import { storageService } from './storageService';
 import { searchEngine } from './searchEngine';
+import { circleTestService } from './circleTestService';
+import { customRouteService } from './customRouteService';
 
 type MissionStateListener = (state: MissionState, elapsedSec: number, remainingSec: number) => void;
 type AuthorityListener = (authority: FlightCommandAuthority) => void;
@@ -279,19 +281,28 @@ class MissionEngine {
               this.commandAuthority === 'AUTONOMOUS' &&
               Math.abs(currentTelem.altitude - targetAlt) <= (tolerance + 0.8)
             ) {
-              this.transitionTo(
-                'SEARCHING',
-                `Altitude stabilized at ${currentTelem.altitude.toFixed(1)}m. Commencing autonomous ${this.missionConfig.searchAlgorithm} search pattern.`
-              );
-              searchEngine.updateConfig({
-                searchAltitude: targetAlt,
-                searchBoundary: this.missionConfig.searchBoundary,
-                algorithm: this.missionConfig.searchAlgorithm,
-                flightSpeedMs: this.missionConfig.flightSpeedMs,
-                desiredOverlapPercent: this.missionConfig.desiredOverlapPercent || 25
-              });
-              searchEngine.startSearch(targetAlt);
-              mavlinkService.commandStartSearch();
+              const customMission = customRouteService.getCurrentMission();
+              if (customMission && customMission.waypoints && customMission.waypoints.length >= 2) {
+                this.transitionTo(
+                  'OUTBOUND_NAVIGATION',
+                  `Altitude stabilized at ${currentTelem.altitude.toFixed(1)}m. Commencing custom GPS route navigation (${customMission.waypoints.length} waypoints).`
+                );
+                customRouteService.startExecution();
+              } else {
+                this.transitionTo(
+                  'SEARCHING',
+                  `Altitude stabilized at ${currentTelem.altitude.toFixed(1)}m. Commencing autonomous ${this.missionConfig.searchAlgorithm} search pattern.`
+                );
+                searchEngine.updateConfig({
+                  searchAltitude: targetAlt,
+                  searchBoundary: this.missionConfig.searchBoundary,
+                  algorithm: this.missionConfig.searchAlgorithm,
+                  flightSpeedMs: this.missionConfig.flightSpeedMs,
+                  desiredOverlapPercent: this.missionConfig.desiredOverlapPercent || 25
+                });
+                searchEngine.startSearch(targetAlt);
+                mavlinkService.commandStartSearch();
+              }
             }
           }, (this.missionConfig.stabilizationSeconds || 2) * 1000);
         }
@@ -817,6 +828,14 @@ class MissionEngine {
     return false;
   }
 
+  public clearHomePoint(): void {
+    mavlinkService.clearHomePoint();
+    if (this.currentState === 'HOME_SET') {
+      this.transitionTo('IDLE', 'Home reference cleared by operator.');
+    }
+    this.persistState();
+  }
+
   public setForceBypassChecks(val: boolean) {
     this.forceBypassChecks = val;
   }
@@ -1033,6 +1052,40 @@ class MissionEngine {
         this.transitionTo('RETURNING_HOME', 'Airborne RTL in progress.');
       }, 2000);
     }, 1000);
+  }
+
+  /**
+   * STOP / ABORT:
+   * Immediately stops autonomous mission, cancels search & circle,
+   * commands safe hold (LOITER) without initiating RTL, and updates state.
+   */
+  public abortMission(reason: string = 'Operator Aborted'): void {
+    if (this.timerInterval) clearInterval(this.timerInterval);
+    if (this.waitingForAckTimer) clearTimeout(this.waitingForAckTimer);
+    if (this.armingTimeoutTimer) clearTimeout(this.armingTimeoutTimer);
+    this.isAwaitingFcMotorStart = false;
+    this.rtlCommandSent = false;
+
+    // 1. Stop autonomous search algorithm
+    searchEngine.stopSearch(reason);
+
+    // 2. Abort circle flight if active
+    circleTestService.abort(reason);
+
+    // 2b. Stop custom route execution if active
+    customRouteService.stopExecution(reason);
+
+    // 3. Command flight controller to LOITER (hold position safely, do NOT RTL)
+    mavlinkService.setFlightMode('LOITER');
+
+    // 4. Release autonomous authority
+    this.commandAuthority = 'MANUAL';
+    this.notifyAuthority();
+
+    this.transitionTo('ABORTED', `Mission Aborted: ${reason}. Drone commanded to LOITER position hold.`);
+    audioService.playBeep(300, 400, 'sawtooth');
+    audioService.triggerHaptic('warning');
+    this.persistState();
   }
 
   private handleMissionTimeout() {

@@ -4,17 +4,15 @@ import { PixhawkConnectionState } from '../../types/mavlink';
 import { RunnerLinkState } from '../../types/runner';
 import { mavlinkService } from '../../services/mavlinkService';
 import { missionEngine } from '../../services/missionEngine';
+import { ipCameraService, IpCameraStatus } from '../../services/ipCameraService';
 import { CameraVisionHUD } from './CameraVisionHUD';
 import { QRResultCard } from './QRResultCard';
-import { PixhawkMonitor } from './PixhawkMonitor';
-import { PreArmChecksPanel } from '../common/PreArmChecksPanel';
 import { MissionTimer } from '../common/MissionTimer';
 import { AutonomousMissionStatusBar } from '../Mission/AutonomousMissionStatusBar';
 import { AutonomousMissionConfigModal } from '../Mission/AutonomousMissionConfigModal';
-import { LoiterTestMissionCard } from '../Mission/LoiterTestMissionCard';
-import { CircleTestMissionCard } from '../Mission/CircleTestMissionCard';
 import { DisarmSafetyConfirmModal } from '../common/DisarmSafetyConfirmModal';
 import { BatteryMonitorCard } from '../common/BatteryMonitorCard';
+import { GoogleMapGroundStation } from '../GroundStation/GoogleMapGroundStation';
 import {
   Play,
   RotateCcw,
@@ -23,6 +21,8 @@ import {
   ShieldCheck,
   Zap,
   Cpu,
+  Camera,
+  Map,
   Navigation,
   Battery,
   Wifi,
@@ -49,7 +49,8 @@ import {
   ArrowLeft,
   ArrowRight,
   Hand,
-  Compass
+  Compass,
+  Video
 } from 'lucide-react';
 
 interface DroneDashboardProps {
@@ -92,11 +93,33 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
   const [isRtlConfirmOpen, setIsRtlConfirmOpen] = useState<boolean>(false);
   // Disarm Safety Warning Modal State (mid-air protection)
   const [isDisarmSafetyModalOpen, setIsDisarmSafetyModalOpen] = useState<boolean>(false);
+  // Primary View toggle: Camera Vision vs Tactical Google Map
+  const [primaryView, setPrimaryView] = useState<'CAMERA' | 'MAP'>('CAMERA');
 
   // Manual Backup Mode & Authority
   const [commandAuthority, setCommandAuthority] = useState<FlightCommandAuthority>(missionEngine.getCommandAuthority());
   const [isManualDrawerOpen, setIsManualDrawerOpen] = useState<boolean>(false);
   const [manualSwitchError, setManualSwitchError] = useState<string | null>(null);
+  // IP Camera Stream state (Coordinated with Ground Station)
+  const [isIpCameraOn, setIsIpCameraOn] = useState<boolean>(() => ipCameraService.isIpCameraEnabled());
+  const [cameraStatus, setCameraStatus] = useState<IpCameraStatus>(() => ipCameraService.getStatus());
+  const [streamUrl, setStreamUrl] = useState<string>(() => ipCameraService.getStreamUrl());
+  const [isEditingStreamUrl, setIsEditingStreamUrl] = useState<boolean>(false);
+  const [streamUrlDraft, setStreamUrlDraft] = useState<string>(streamUrl);
+
+  useEffect(() => {
+    const unsubToggle = ipCameraService.subscribeToggle(setIsIpCameraOn);
+    const unsubStatus = ipCameraService.subscribeStatus(setCameraStatus);
+    const unsubUrl = ipCameraService.subscribeUrl((url) => {
+      setStreamUrl(url);
+      setStreamUrlDraft(url);
+    });
+    return () => {
+      unsubToggle();
+      unsubStatus();
+      unsubUrl();
+    };
+  }, []);
 
   const homePoint = mavlinkService.getHomePoint();
   const missionValidation = missionEngine.validateMission();
@@ -648,42 +671,173 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
         </div>
       </div>
 
-      {/* 4. Main Grid: Full-Screen Live Camera Preview & Subsystems */}
+      {/* 4. Main Grid: IP Camera + Scanner HUD / Map & Essential Subsystems */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-        {/* Left: Live Full-Screen Responsive Optical QR Scanner */}
-        <div className="lg:col-span-7 space-y-4">
+        {/* Left: 1. IP Camera Option (Before Scanner) + 2. Drone QR Scanner HUD / Tactical Map */}
+        <div className="lg:col-span-7 space-y-3">
+          {/* IP CAMERA OPTION (Before Scanner Option per Requirement 1) */}
+          <div className="bg-slate-900/95 border border-slate-800 rounded-xl p-3.5 shadow-xl font-mono">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-2.5 border-b border-slate-800">
+              <div className="flex items-center space-x-2">
+                <Video className={`w-4 h-4 ${isIpCameraOn ? 'text-sky-400' : 'text-slate-500'}`} />
+                <span className="text-xs font-black uppercase text-white tracking-wider">
+                  IP CAMERA OPTION
+                </span>
+                <span
+                  className={`text-[9px] font-black px-2 py-0.5 rounded-full border ${
+                    isIpCameraOn
+                      ? cameraStatus === 'LIVE'
+                        ? 'bg-emerald-950/80 border-emerald-500/70 text-emerald-300'
+                        : cameraStatus === 'CONNECTING'
+                        ? 'bg-amber-950/80 border-amber-500/70 text-amber-300 animate-pulse'
+                        : 'bg-rose-950/80 border-rose-500/70 text-rose-300'
+                      : 'bg-slate-950 border-slate-800 text-slate-500'
+                  }`}
+                >
+                  {isIpCameraOn ? `CAMERA: ${cameraStatus}` : 'CAMERA: OFF'}
+                </span>
+              </div>
+
+              {/* IP Camera ON/OFF Toggle */}
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={() => ipCameraService.setIpCameraEnabled(!isIpCameraOn)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider transition cursor-pointer flex items-center space-x-1.5 border shadow ${
+                    isIpCameraOn
+                      ? 'bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white border-sky-400 shadow-sky-600/30'
+                      : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
+                  }`}
+                >
+                  <span className={`w-2 h-2 rounded-full ${isIpCameraOn ? 'bg-white' : 'bg-slate-500'}`} />
+                  <span>IP CAMERA {isIpCameraOn ? 'ON' : 'OFF'}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Configured IP Camera Stream URL & Status Details */}
+            <div className="mt-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] text-slate-400">
+              <div className="flex items-center space-x-1.5 truncate">
+                <span className="text-slate-500 shrink-0 font-bold uppercase text-[10px]">Stream URL:</span>
+                {isEditingStreamUrl ? (
+                  <div className="flex items-center space-x-1 w-full max-w-xs">
+                    <input
+                      type="url"
+                      value={streamUrlDraft}
+                      onChange={(e) => setStreamUrlDraft(e.target.value)}
+                      className="bg-slate-950 border border-slate-700 rounded px-2 py-0.5 text-xs text-slate-200 font-mono w-full"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        ipCameraService.setStreamUrl(streamUrlDraft);
+                        setIsEditingStreamUrl(false);
+                      }}
+                      className="px-2 py-0.5 rounded bg-sky-600 hover:bg-sky-500 text-white font-bold text-[10px] cursor-pointer"
+                    >
+                      SAVE
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingStreamUrl(false)}
+                      className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 text-[10px] cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ) : (
+                  <span className="text-sky-300 font-mono truncate">{streamUrl}</span>
+                )}
+              </div>
+
+              {!isEditingStreamUrl && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStreamUrlDraft(streamUrl);
+                    setIsEditingStreamUrl(true);
+                  }}
+                  className="text-slate-400 hover:text-white text-[10px] font-bold uppercase underline cursor-pointer shrink-0"
+                >
+                  Edit URL
+                </button>
+              )}
+            </div>
+
+            {isIpCameraOn && (
+              <div className="mt-2 p-2 bg-slate-950/80 rounded-lg border border-slate-800/80 text-[10px] text-slate-300 flex items-center justify-between">
+                <span>Camera feed available inside Ground Station designated video area.</span>
+                <span className="text-sky-400 font-bold">Auto-streaming</span>
+              </div>
+            )}
+          </div>
+
+          {/* View Segmented Switcher */}
+          <div className="flex items-center justify-between px-1">
+            <div className="flex items-center space-x-1 bg-slate-900/90 p-1 rounded-xl border border-slate-800">
+              <button
+                type="button"
+                onClick={() => setPrimaryView('CAMERA')}
+                className={`px-3 py-1 rounded-lg text-xs font-mono font-bold flex items-center space-x-1.5 transition cursor-pointer ${
+                  primaryView === 'CAMERA'
+                    ? 'bg-sky-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <Camera className="w-3.5 h-3.5" />
+                <span>SCANNER / CAMERA HUD</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPrimaryView('MAP')}
+                className={`px-3 py-1 rounded-lg text-xs font-mono font-bold flex items-center space-x-1.5 transition cursor-pointer ${
+                  primaryView === 'MAP'
+                    ? 'bg-emerald-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <Map className="w-3.5 h-3.5" />
+                <span>TACTICAL GOOGLE MAP</span>
+              </button>
+            </div>
+            <span className="text-[10px] text-slate-400 font-mono hidden sm:inline">
+              {primaryView === 'MAP' ? 'Google Hybrid / Geofence Workspace' : 'Optical QR Scanner'}
+            </span>
+          </div>
+
+          {/* SCANNER OPTION (Follows directly after IP Camera option per Requirement 1) */}
           <div className="rounded-xl overflow-hidden border border-slate-800 shadow-2xl h-[420px] sm:h-[480px]">
-            <CameraVisionHUD
-              onQRDetected={onQRDetected}
-              isScanning={isScanning}
-              decodedQR={decodedQR}
-              telemetry={telemetry}
-              className="w-full h-full"
-            />
+            {primaryView === 'CAMERA' ? (
+              <CameraVisionHUD
+                onQRDetected={onQRDetected}
+                isScanning={isScanning}
+                decodedQR={decodedQR}
+                telemetry={telemetry}
+                className="w-full h-full"
+              />
+            ) : (
+              <GoogleMapGroundStation
+                telemetry={telemetry}
+                homePoint={homePoint}
+                pixhawkState={pixhawkState}
+                missionState={missionState}
+                onSetHomePoint={(coords) => coords ? missionEngine.setHomePoint(coords.lat, coords.lng) : missionEngine.setHomePoint()}
+                onStartMission={() => missionEngine.startMission()}
+                onEmergencyRTL={onEmergencyRTL}
+                className="h-full w-full"
+              />
+            )}
           </div>
         </div>
 
-        {/* Right: Target Confirmation, Telemetry Deck, & Pre-Arm Panel */}
+        {/* Right: Target Confirmation, Telemetry Deck, & Manual Control (Simplified - Diagnostics Removed) */}
         <div className="lg:col-span-5 space-y-4">
           {/* Live Battery Health & Telemetry Deck */}
           <BatteryMonitorCard
             batteryPercent={telemetry.batteryPercent}
             batteryVoltage={telemetry.batteryVoltage}
             batteryCurrent={telemetry.batteryCurrent}
-          />
-
-          {/* Predefined 5M Loiter Test Mission Card */}
-          <LoiterTestMissionCard
-            telemetry={telemetry}
-            homePoint={homePoint}
-            pixhawkState={pixhawkState}
-          />
-
-          {/* Autonomous Circle Orbit Test Mission Card */}
-          <CircleTestMissionCard
-            telemetry={telemetry}
-            homePoint={homePoint}
-            pixhawkState={pixhawkState}
+            batteryCellCount={telemetry.batteryCellCount}
           />
 
           {/* Decoded QR Target Result */}
@@ -781,18 +935,6 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
               </div>
             </div>
           )}
-
-          {/* Dedicated Mode-Aware Pre-Arm Validation Panel */}
-          <PreArmChecksPanel
-            connectionState={pixhawkState}
-            telemetry={telemetry}
-            homePoint={homePoint}
-          />
-
-          {/* Pixhawk Hardware Telemetry & Message Log Monitor */}
-          <PixhawkMonitor
-            connectionState={pixhawkState}
-          />
         </div>
       </div>
 
