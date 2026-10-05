@@ -51,12 +51,22 @@ const char* FALLBACK_SSID = "";
 const char* FALLBACK_PASS = "";
 
 // =====================================================================================
-// 2. PRODUCTION CLOUD RELAY CONFIGURATION
+// 2. PRODUCTION CLOUD RELAY & LOCAL FALLBACK CONFIGURATION
 // =====================================================================================
-const char* RELAY_HOST    = "saeindia-szj0.onrender.com";
-const uint16_t RELAY_PORT = 443;
-const char* RELAY_PATH    = "/ws?client=esp32";
-const char* RELAY_WSS_URL = "wss://saeindia-szj0.onrender.com/ws?client=esp32";
+// Set to true to connect directly to your laptop running 'npm run relay:start' (offline field mode)
+// Set to false to connect to Render Cloud Relay over the internet (production mode)
+#define USE_LOCAL_RELAY       false
+
+// Production Render Cloud Server
+const char* RELAY_HOST        = "saeindia-szj0.onrender.com";
+const uint16_t RELAY_PORT     = 443;
+const char* RELAY_PATH        = "/ws?client=esp32";
+const char* RELAY_WSS_URL     = "wss://saeindia-szj0.onrender.com/ws?client=esp32";
+
+// Local Relay (For offline field testing with laptop running 'npm run relay:start')
+const char* LOCAL_RELAY_IP    = "10.18.186.59";   // Laptop Wi-Fi IP
+const uint16_t LOCAL_RELAY_PORT = 8080;
+const char* LOCAL_RELAY_PATH  = "/ws?client=esp32";
 
 // =====================================================================================
 // 3. PIXHAWK UART PIN & BAUD CONFIGURATION
@@ -309,6 +319,16 @@ void connectToCloudRelay() {
   if (millis() - lastReconnectAttempt < RECONNECT_DELAY_MS) return;
   lastReconnectAttempt = millis();
 
+#if USE_LOCAL_RELAY
+  Serial.println("💻 [WS] Connecting to Local Laptop Relay Server...");
+  Serial.printf("🔗 URL: ws://%s:%d%s\n", LOCAL_RELAY_IP, LOCAL_RELAY_PORT, LOCAL_RELAY_PATH);
+
+  bool ok = wsClient.connect(LOCAL_RELAY_IP, LOCAL_RELAY_PORT, LOCAL_RELAY_PATH);
+  if (!ok) {
+    Serial.printf("⚠️  [WS] Could not connect to Laptop Relay at %s:%d. Ensure 'npm run relay:start' is running on laptop!\n",
+                  LOCAL_RELAY_IP, LOCAL_RELAY_PORT);
+  }
+#else
   // 1. DNS Verification
   IPAddress relayIP;
   if (!WiFi.hostByName(RELAY_HOST, relayIP)) {
@@ -330,8 +350,11 @@ void connectToCloudRelay() {
   }
 
   if (!ok) {
-    Serial.println("⚠️  [WSS] Connection attempt failed. Will retry in 2.5s...");
+    Serial.println("⚠️  [WSS] Connection attempt failed.");
+    Serial.println("ℹ️  NOTE: Outbound IPv4 to the internet is unreachable on this Wi-Fi network.");
+    Serial.println("👉 ACTION: Turn on Mobile Data on your phone hotspot, OR set '#define USE_LOCAL_RELAY true'.");
   }
+#endif
 }
 
 // =====================================================================================
