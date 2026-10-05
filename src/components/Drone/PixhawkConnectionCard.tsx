@@ -39,6 +39,7 @@ import {
   Trash2
 } from 'lucide-react';
 import { SerialDiagnosticsModal } from './SerialDiagnosticsModal';
+import { ConnectionDiagnosticsPanel } from './ConnectionDiagnosticsPanel';
 
 interface PixhawkConnectionCardProps {
   connectionState: PixhawkConnectionState;
@@ -840,7 +841,7 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                 <div className="flex items-center space-x-2">
                   <span className={`w-2.5 h-2.5 rounded-full ${
                     linkState === 'CONNECTED'
-                      ? 'bg-emerald-400 animate-ping'
+                      ? ((connectionState.bytesReceived || 0) > 0 ? 'bg-emerald-400 animate-ping' : 'bg-amber-400 animate-pulse')
                       : linkState === 'CONNECTING'
                       ? 'bg-amber-400 animate-pulse'
                       : linkState === 'RECONNECTING'
@@ -850,7 +851,13 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                       : 'bg-slate-500'
                   }`} />
                   <span className="font-mono font-black text-sm uppercase">
-                    ● {esp32Mode === 'SECURE' ? 'SECURE MODE — WSS Relay' : 'LOCAL MODE — ESP32 Direct WS'} : {linkState === 'CONNECTED' ? 'CONNECTED' : linkState === 'CONNECTING' ? 'CONNECTING...' : linkState === 'RECONNECTING' ? 'RECONNECTING...' : 'DISCONNECTED'}
+                    ● {esp32Mode === 'SECURE' ? 'SECURE MODE — WSS Relay' : 'LOCAL MODE — ESP32 Direct WS'} : {
+                      linkState === 'CONNECTED'
+                        ? ((connectionState.bytesReceived || 0) > 0 ? 'CONNECTED — STREAMING TELEMETRY ✓' : 'CONNECTED — NO TELEMETRY')
+                        : linkState === 'CONNECTING' ? 'CONNECTING...'
+                        : linkState === 'RECONNECTING' ? 'RECONNECTING...'
+                        : 'DISCONNECTED'
+                    }
                   </span>
                 </div>
 
@@ -935,29 +942,34 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
               )}
             </div>
 
-            {/* Connection Path Hop Visualizer (Requirement 8) */}
+            {/* LIVE CONNECTION DIAGNOSTICS PANEL (Prompt Requirement 25) */}
+            <ConnectionDiagnosticsPanel connectionState={connectionState} className="my-2" />
+
+            {/* Production Architecture Visualizer (Requirement 1 & 8) */}
             <div className="p-3 bg-slate-950/90 rounded-xl border border-slate-800 space-y-2">
               <div className="flex items-center justify-between text-[11px]">
                 <span className="font-black uppercase text-slate-300 flex items-center space-x-1.5">
-                  <Activity className="w-3.5 h-3.5 text-purple-400" />
-                  <span>CONNECTION PATH</span>
+                  <Activity className="w-3.5 h-3.5 text-sky-400" />
+                  <span>PRODUCTION ARCHITECTURE</span>
                 </span>
-                <span className="text-[10px] text-purple-300 font-mono">
-                  {esp32Mode === 'SECURE' ? 'SECURE MODE (WSS Relay)' : 'LOCAL MODE (Direct WS)'}
+                <span className="text-[10px] text-sky-300 font-mono">
+                  Netlify ➔ Render (WSS /ws) ➔ ESP32 ➔ Pixhawk (TELEM2 @ 57600)
                 </span>
               </div>
 
               {esp32Mode === 'SECURE' ? (
-                /* Multi-hop path: Browser -> WSS Relay -> Local Connector -> ESP32 */
+                /* Production 4-Node Path: Netlify -> Render Relay -> ESP32 -> Pixhawk */
                 <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 text-center text-[11px]">
+                  {/* Node 1: Netlify Frontend */}
                   <div className="p-2 rounded-lg border bg-slate-900 border-slate-800 flex flex-col items-center">
                     <span className="font-bold text-emerald-400 flex items-center space-x-1">
                       <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                      <span>Browser</span>
+                      <span>Netlify Ground Station</span>
                     </span>
-                    <span className="text-[9px] text-slate-400 mt-0.5">HTTPS Vercel</span>
+                    <span className="text-[9px] text-slate-400 mt-0.5">https://saeindiasphn...</span>
                   </div>
 
+                  {/* Node 2: Render Relay */}
                   <div className={`p-2 rounded-lg border flex flex-col items-center ${
                     isWebSocketOpen
                       ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-200'
@@ -965,54 +977,62 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                   }`}>
                     <span className="font-bold flex items-center space-x-1">
                       <span className={`w-2 h-2 rounded-full ${isWebSocketOpen ? 'bg-emerald-400' : 'bg-slate-600'}`}></span>
-                      <span>WSS Relay</span>
+                      <span>Render WSS Relay</span>
                     </span>
                     <span className="text-[9px] text-slate-400 mt-0.5 truncate max-w-[120px]" title={esp32SecureEndpoint || 'Cloud Relay'}>
-                      {isWebSocketOpen ? 'Connected ✓' : 'Cloud Relay'}
+                      {isWebSocketOpen ? 'Connected ✓ (/ws)' : 'Cloud Relay'}
                     </span>
                   </div>
 
+                  {/* Node 3: ESP32 Bridge */}
                   <div className={`p-2 rounded-lg border flex flex-col items-center ${
-                    isWebSocketOpen && connectionState.esp32ConnectorOnline
+                    isWebSocketOpen && (connectionState.esp32DeviceOnline || connectionState.esp32WssConnected)
                       ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-200'
-                      : isWebSocketOpen && !connectionState.esp32ConnectorOnline
+                      : isWebSocketOpen
                       ? 'bg-amber-950/40 border-amber-500/40 text-amber-200'
                       : 'bg-slate-900 border-slate-800 text-slate-400'
                   }`}>
                     <span className="font-bold flex items-center space-x-1">
                       <span className={`w-2 h-2 rounded-full ${
-                        isWebSocketOpen && connectionState.esp32ConnectorOnline
+                        isWebSocketOpen && (connectionState.esp32DeviceOnline || connectionState.esp32WssConnected)
                           ? 'bg-emerald-400'
                           : isWebSocketOpen
                           ? 'bg-amber-400 animate-pulse'
                           : 'bg-slate-600'
                       }`}></span>
-                      <span>Local Connector</span>
+                      <span>ESP32 Bridge</span>
                     </span>
                     <span className="text-[9px] text-slate-400 mt-0.5">
-                      {isWebSocketOpen && connectionState.esp32ConnectorOnline ? 'Online ✓' : 'Local Agent'}
+                      {isWebSocketOpen && (connectionState.esp32DeviceOnline || connectionState.esp32WssConnected)
+                        ? 'WSS Connected ✓'
+                        : 'Awaiting ESP32'}
                     </span>
                   </div>
 
+                  {/* Node 4: Pixhawk MAVLink */}
                   <div className={`p-2 rounded-lg border flex flex-col items-center ${
-                    isWebSocketOpen && connectionState.esp32DeviceOnline
+                    connectionState.isConnected && isMavlinkHeartbeatReceived
                       ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-200'
-                      : isWebSocketOpen && !connectionState.esp32DeviceOnline
-                      ? 'bg-rose-950/30 border-rose-500/30 text-rose-300'
+                      : (connectionState.esp32UartRxBytes ?? 0) > 0
+                      ? 'bg-amber-950/40 border-amber-500/40 text-amber-200'
                       : 'bg-slate-900 border-slate-800 text-slate-400'
                   }`}>
                     <span className="font-bold flex items-center space-x-1">
                       <span className={`w-2 h-2 rounded-full ${
-                        isWebSocketOpen && connectionState.esp32DeviceOnline
+                        connectionState.isConnected && isMavlinkHeartbeatReceived
                           ? 'bg-emerald-400'
-                          : isWebSocketOpen
-                          ? 'bg-rose-400'
+                          : (connectionState.esp32UartRxBytes ?? 0) > 0
+                          ? 'bg-amber-400 animate-pulse'
                           : 'bg-slate-600'
                       }`}></span>
-                      <span>ESP32</span>
+                      <span>Pixhawk Controller</span>
                     </span>
                     <span className="text-[9px] text-slate-400 mt-0.5">
-                      {isWebSocketOpen && connectionState.esp32DeviceOnline ? 'Bridged ✓' : 'LAN 192.168.x.x'}
+                      {connectionState.isConnected && isMavlinkHeartbeatReceived
+                        ? 'Heartbeat Active ✓'
+                        : (connectionState.esp32UartRxBytes ?? 0) > 0
+                        ? `UART ${connectionState.esp32UartRxBytes}B (No HB)`
+                        : 'TELEM2 @ 57600'}
                     </span>
                   </div>
                 </div>
@@ -1410,10 +1430,10 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                   <span>Secure WSS Relay Architecture (Zero Port-Forwarding)</span>
                 </div>
                 <p className="text-[11px] text-emerald-200/90 leading-relaxed">
-                  The browser connects securely via WSS to the cloud relay. The local connector agent running on your ESP32 Wi-Fi bridges packets outbound to the relay and forwards to the ESP32 via local WS.
+                  The Ground Station connects securely via WSS to the Render cloud relay. The ESP32 connects via WSS over Wi-Fi and bridges packets bidirectionally to Pixhawk TELEM2.
                 </p>
                 <div className="text-[11px] font-mono text-emerald-300/90 bg-slate-950/80 p-2 rounded border border-emerald-500/30">
-                  HTTPS Web GCS (Vercel) ➔ Cloud Relay (WSS) ➔ Local Connector (Outbound WSS) ➔ ESP32 (LAN ws://) ➔ Pixhawk
+                  Netlify Ground Station ➔ Render Cloud Relay (WSS /ws) ➔ ESP32 Bridge ➔ Pixhawk TELEM2 (57600 baud)
                 </div>
               </div>
             ) : null}
@@ -1837,17 +1857,17 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                 <div className="p-2.5 bg-slate-900/90 rounded-lg border border-emerald-500/30 space-y-1">
                   <div className="font-bold text-emerald-300 flex items-center space-x-1">
                     <Lock className="w-3.5 h-3.5" />
-                    <span>B. PRODUCTION DEPLOYED HTTPS (Vercel / Cloud)</span>
+                    <span>B. PRODUCTION ARCHITECTURE (Netlify + Render + ESP32)</span>
                   </div>
                   <div className="font-mono text-sky-400 text-[10px] p-2 bg-black/60 rounded">
-                    HTTPS Web Ground Station (https://my-app.vercel.app)<br/>
-                    &nbsp;&nbsp;&nbsp;&nbsp;↓ (Secure WSS over TLS)<br/>
-                    wss://relay.yourdomain.com:8443 (Cloud / TLS Reverse Proxy)<br/>
-                    &nbsp;&nbsp;&nbsp;&nbsp;↓ (Forwarded to LAN or VPN)<br/>
-                    ESP32-S3 Bridge ➔ Pixhawk TELEM2 (UART @ 57600)
+                    Netlify Ground Station (https://saeindiasphn.netlify.app/)<br/>
+                    &nbsp;&nbsp;&nbsp;&nbsp;↓ (Secure WSS over TLS /ws)<br/>
+                    Render Cloud Relay (wss://saeindia-szj0.onrender.com/ws)<br/>
+                    &nbsp;&nbsp;&nbsp;&nbsp;↓ (Bidirectional WebSocket)<br/>
+                    ESP32-S3 Bridge ➔ Pixhawk TELEM2 (UART @ 57600 baud)
                   </div>
                   <p className="text-[10px] text-slate-400">
-                    A deployed HTTPS web application cannot directly reach raw LAN IP addresses (like <code>192.168.10.109</code>) with <code>wss://</code> without a valid SSL/TLS certificate. Production uses a TLS reverse proxy or relay.
+                    Direct end-to-end telemetry and command bridge with zero intermediate gateways and true byte tracking.
                   </p>
                 </div>
               </div>

@@ -368,6 +368,19 @@ class MAVLinkService {
       this.connectionState.esp32ErrorMessage = esp32Transport.getLastErrorMessage();
       this.connectionState.esp32ConnectorOnline = esp32Transport.isConnectorOnline();
       this.connectionState.esp32DeviceOnline = esp32Transport.isEsp32Online();
+      this.connectionState.esp32WifiConnected = esp32Transport.getEsp32WifiConnected();
+      this.connectionState.esp32WifiRssi = esp32Transport.getEsp32WifiRssi();
+      this.connectionState.esp32WifiIp = esp32Transport.getEsp32WifiIp();
+      this.connectionState.esp32WssConnected = esp32Transport.getEsp32WssConnected();
+      this.connectionState.esp32UartRxBytes = esp32Transport.getEsp32UartRxBytes();
+      this.connectionState.esp32UartTxBytes = esp32Transport.getEsp32UartTxBytes();
+      this.connectionState.esp32WsTxBytes = esp32Transport.getEsp32WsTxBytes();
+      this.connectionState.esp32WsRxBytes = esp32Transport.getEsp32WsRxBytes();
+      this.connectionState.esp32MavlinkRxPackets = esp32Transport.getEsp32MavlinkRxPackets();
+      this.connectionState.esp32MavlinkHeartbeats = esp32Transport.getEsp32MavlinkHeartbeats();
+      this.connectionState.esp32MavlinkHeartbeatDetected = esp32Transport.getEsp32MavlinkHeartbeatDetected();
+      this.connectionState.esp32DiagnosticCase = esp32Transport.getEsp32DiagnosticCase();
+      this.connectionState.connectionSummaryState = esp32Transport.getConnectionSummaryState();
     }
 
     this.notifyConnection();

@@ -51,7 +51,117 @@ export const IndependentConnectionStatusBar: React.FC<IndependentConnectionStatu
           </span>
         </div>
 
-        {/* 2. PHONE GPS (Local Browser Geolocation - Clickable to toggle) */}
+        {/* 2. CLOUD RELAY (Render WSS Relay) */}
+        <div
+          onClick={onOpenConnectionModal}
+          title="Render Cloud WebSocket Relay. Click to view diagnostics."
+          className={`flex items-center space-x-1.5 px-2 py-1 rounded border cursor-pointer transition hover:scale-105 ${
+            pixhawkState.esp32LinkState === 'CONNECTED'
+              ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300 hover:border-emerald-400'
+              : pixhawkState.esp32LinkState === 'CONNECTING' || pixhawkState.esp32LinkState === 'RECONNECTING'
+              ? 'bg-amber-950/40 border-amber-500/40 text-amber-300 animate-pulse hover:border-amber-400'
+              : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-600'
+          }`}
+        >
+          <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-sm" />
+          <span className="text-[10px] text-slate-400 font-bold uppercase">CLOUD RELAY</span>
+          <span className="font-black text-emerald-400">
+            {pixhawkState.esp32LinkState === 'CONNECTED' ? 'CONNECTED' : pixhawkState.esp32LinkState === 'CONNECTING' ? 'CONNECTING...' : 'DISCONNECTED'}
+          </span>
+        </div>
+
+        {/* 3. ESP32 WI-FI & WSS */}
+        <div
+          onClick={onOpenConnectionModal}
+          title="ESP32-S3 Wireless Bridge Link. Click to configure."
+          className={`flex items-center space-x-1.5 px-2 py-1 rounded border cursor-pointer transition hover:scale-105 ${
+            pixhawkState.esp32DeviceOnline || pixhawkState.esp32WssConnected
+              ? 'bg-purple-950/40 border-purple-500/40 text-purple-300 hover:border-purple-400'
+              : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-600'
+          }`}
+        >
+          <Wifi className="w-3.5 h-3.5 text-purple-400" />
+          <span className="text-[10px] text-slate-400 font-bold uppercase">ESP32</span>
+          <span className="flex items-center space-x-1 font-black">
+            <span
+              className={`w-2 h-2 rounded-full ${
+                pixhawkState.esp32DeviceOnline || pixhawkState.esp32WssConnected
+                  ? 'bg-purple-400 shadow-sm shadow-purple-400/50'
+                  : 'bg-slate-500'
+              }`}
+            />
+            <span>
+              {pixhawkState.esp32DeviceOnline || pixhawkState.esp32WssConnected
+                ? `WSS CONNECTED`
+                : 'DISCONNECTED'}
+            </span>
+          </span>
+        </div>
+
+        {/* 4. PIXHAWK UART LINK */}
+        <div
+          onClick={onOpenConnectionModal}
+          title="Pixhawk TELEM2 UART Physical Serial Link."
+          className={`flex items-center space-x-1.5 px-2 py-1 rounded border cursor-pointer transition hover:scale-105 ${
+            (pixhawkState.esp32UartRxBytes ?? 0) > 0
+              ? 'bg-cyan-950/40 border-cyan-500/40 text-cyan-300 hover:border-cyan-400'
+              : pixhawkState.esp32DeviceOnline || pixhawkState.esp32WssConnected
+              ? 'bg-amber-950/40 border-amber-500/40 text-amber-300 animate-pulse hover:border-amber-400'
+              : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-600'
+          }`}
+        >
+          <Radio className="w-3.5 h-3.5 text-cyan-400" />
+          <span className="text-[10px] text-slate-400 font-bold uppercase">PIXHAWK UART</span>
+          <span className="flex items-center space-x-1 font-black">
+            <span
+              className={`w-2 h-2 rounded-full ${
+                (pixhawkState.esp32UartRxBytes ?? 0) > 0
+                  ? 'bg-cyan-400 shadow-sm shadow-cyan-400/50'
+                  : pixhawkState.esp32DeviceOnline || pixhawkState.esp32WssConnected
+                  ? 'bg-amber-400'
+                  : 'bg-slate-500'
+              }`}
+            />
+            <span>
+              {(pixhawkState.esp32UartRxBytes ?? 0) > 0
+                ? 'CONNECTED'
+                : pixhawkState.esp32DeviceOnline || pixhawkState.esp32WssConnected
+                ? 'NO DATA'
+                : 'DISCONNECTED'}
+            </span>
+          </span>
+        </div>
+
+        {/* 5. MAVLINK HEARTBEAT */}
+        <div
+          onClick={onOpenConnectionModal}
+          title="MAVLink Telemetry Protocol & Heartbeat Stream."
+          className={`flex items-center space-x-1.5 px-2 py-1 rounded border cursor-pointer transition hover:scale-105 ${
+            pixhawkState.isConnected && isPixhawkConnected
+              ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300 hover:border-emerald-400'
+              : (pixhawkState.esp32UartRxBytes ?? 0) > 0
+              ? 'bg-amber-950/40 border-amber-500/40 text-amber-300 animate-pulse hover:border-amber-400'
+              : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-600'
+          }`}
+        >
+          <span className="text-[10px] text-slate-400 font-bold uppercase">MAVLINK</span>
+          <span className="flex items-center space-x-1 font-black">
+            <span
+              className={`w-2 h-2 rounded-full ${
+                pixhawkState.isConnected && isPixhawkConnected
+                  ? 'bg-emerald-400 shadow-sm shadow-emerald-400/50'
+                  : 'bg-slate-500'
+              }`}
+            />
+            <span>
+              {pixhawkState.isConnected && isPixhawkConnected
+                ? 'ACTIVE'
+                : 'NO HEARTBEAT'}
+            </span>
+          </span>
+        </div>
+
+        {/* 6. PHONE GPS (Local Browser Geolocation - Clickable to toggle) */}
         <div
           onClick={() => {
             if (phoneGps.status === 'CONNECTED' || phoneGps.status === 'WAITING_FOR_LOCATION') {
@@ -94,66 +204,6 @@ export const IndependentConnectionStatusBar: React.FC<IndependentConnectionStatu
                 ? 'Denied'
                 : 'Off'}
             </span>
-          </span>
-        </div>
-
-        {/* 3. ESP32 (Persistent Wireless / Bridge Link - Clickable to open connection modal) */}
-        <div
-          onClick={onOpenConnectionModal}
-          title="ESP32 Wireless Bridge. Click to connect or configure."
-          className={`flex items-center space-x-1.5 px-2 py-1 rounded border cursor-pointer transition hover:scale-105 ${
-            isEsp32Connected
-              ? 'bg-purple-950/40 border-purple-500/40 text-purple-300 hover:border-purple-400'
-              : pixhawkState.esp32LinkState === 'CONNECTING' || pixhawkState.esp32LinkState === 'RECONNECTING'
-              ? 'bg-amber-950/40 border-amber-500/40 text-amber-300 animate-pulse hover:border-amber-400'
-              : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-600'
-          }`}
-        >
-          <Wifi className="w-3.5 h-3.5 text-purple-400" />
-          <span className="text-[10px] text-slate-400 font-bold uppercase">ESP32</span>
-          <span className="flex items-center space-x-1 font-black">
-            <span
-              className={`w-2 h-2 rounded-full ${
-                isEsp32Connected
-                  ? 'bg-purple-400 shadow-sm shadow-purple-400/50'
-                  : pixhawkState.esp32LinkState === 'CONNECTING' || pixhawkState.esp32LinkState === 'RECONNECTING'
-                  ? 'bg-amber-400'
-                  : 'bg-slate-500'
-              }`}
-            />
-            <span>
-              {isEsp32Connected
-                ? 'Connected'
-                : pixhawkState.esp32LinkState === 'CONNECTING'
-                ? 'Connecting'
-                : pixhawkState.esp32LinkState === 'RECONNECTING'
-                ? 'Reconnecting'
-                : 'Disconnected'}
-            </span>
-          </span>
-        </div>
-
-        {/* 4. PIXHAWK (MAVLink Flight Controller - Clickable to open connection modal) */}
-        <div
-          onClick={onOpenConnectionModal}
-          title="Pixhawk MAVLink Controller. Click to connect or configure."
-          className={`flex items-center space-x-1.5 px-2 py-1 rounded border cursor-pointer transition hover:scale-105 ${
-            isPixhawkConnected
-              ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300 hover:border-emerald-400'
-              : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-600'
-          }`}
-        >
-          <Radio className="w-3.5 h-3.5 text-sky-400" />
-          <span className="text-[10px] text-slate-400 font-bold uppercase">PIXHAWK</span>
-          <span className="flex items-center space-x-1 font-black">
-            <span
-              className={`w-2 h-2 rounded-full ${
-                isPixhawkConnected
-                  ? 'bg-emerald-400 shadow-sm shadow-emerald-400/50'
-                  : 'bg-slate-500'
-              }`}
-            />
-            <span>{isPixhawkConnected ? 'Connected' : 'Disconnected'}</span>
           </span>
         </div>
 

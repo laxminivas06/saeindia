@@ -314,13 +314,35 @@ export const DroneDashboard: React.FC<DroneDashboardProps> = ({
             onClick={onOpenConnectionModal}
             title="Drone Link Status. Click to connect or configure hardware."
             className={`bg-slate-950/80 p-2 rounded-xl border border-slate-800 flex items-center justify-between cursor-pointer transition hover:border-sky-500/50 ${
-              !pixhawkState.isConnected ? 'hover:bg-rose-950/30' : 'hover:bg-emerald-950/30'
+              pixhawkState.connectionSummaryState === 'CONNECTED_NO_TELEMETRY'
+                ? 'hover:bg-amber-950/30'
+                : !pixhawkState.isConnected
+                ? 'hover:bg-rose-950/30'
+                : 'hover:bg-emerald-950/30'
             }`}
           >
             <span className="text-[10px] text-slate-400 font-bold uppercase">DRONE</span>
-            <span className={`text-[10px] font-black flex items-center space-x-1 ${pixhawkState.isConnected ? 'text-emerald-400' : 'text-rose-400'}`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${pixhawkState.isConnected ? 'bg-emerald-400' : 'bg-rose-400 animate-pulse'}`} />
-              <span>{pixhawkState.isConnected ? 'CONNECTED' : 'CONNECT ⚡'}</span>
+            <span className={`text-[10px] font-black flex items-center space-x-1 ${
+              pixhawkState.connectionSummaryState === 'CONNECTED_NO_TELEMETRY'
+                ? 'text-amber-400'
+                : pixhawkState.isConnected
+                ? 'text-emerald-400'
+                : 'text-rose-400'
+            }`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${
+                pixhawkState.connectionSummaryState === 'CONNECTED_NO_TELEMETRY'
+                  ? 'bg-amber-400 animate-pulse'
+                  : pixhawkState.isConnected
+                  ? 'bg-emerald-400'
+                  : 'bg-rose-400 animate-pulse'
+              }`} />
+              <span>
+                {pixhawkState.connectionSummaryState === 'CONNECTED_NO_TELEMETRY'
+                  ? 'NO TELEMETRY'
+                  : pixhawkState.isConnected
+                  ? 'CONNECTED'
+                  : 'CONNECT ⚡'}
+              </span>
             </span>
           </div>
 

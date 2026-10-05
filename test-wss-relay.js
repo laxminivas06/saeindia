@@ -199,6 +199,47 @@ async function runTests() {
     await testRelayPromise;
     assert(testRelayedToEsp32, 'Test message relayed from Frontend through Render to ESP32');
 
+    // --- TEST 8: ESP32 Live Diagnostics Telemetry Broadcast ---
+    console.log('\n--- Test 8: ESP32_DIAGNOSTICS Telemetry Broadcast ---');
+    let diagRelayedToFrontend = false;
+
+    const diagRelayPromise = new Promise((resolve) => {
+      const handler = (data, isBinary) => {
+        if (!isBinary) {
+          try {
+            const msg = JSON.parse(data.toString());
+            if (msg.type === 'ESP32_DIAGNOSTICS' && msg.raw_uart_rx_bytes === 1234) {
+              diagRelayedToFrontend = true;
+              frontendSocket.off('message', handler);
+              resolve();
+            }
+          } catch (e) {}
+        }
+      };
+      frontendSocket.on('message', handler);
+    });
+
+    esp32Socket.send(JSON.stringify({
+      type: 'ESP32_DIAGNOSTICS',
+      wifi_connected: true,
+      wifi_rssi: -50,
+      wifi_ip: '192.168.1.100',
+      wss_connected: true,
+      raw_uart_rx_bytes: 1234,
+      raw_uart_tx_bytes: 56,
+      mavlink_rx_packets: 20,
+      mavlink_heartbeats: 5,
+      mavlink_heartbeat: true,
+      system_id: 1,
+      component_id: 1,
+      ws_tx_bytes: 1234,
+      ws_rx_bytes: 56,
+      baud_rate: 57600,
+      diagnostic_case: 'OK'
+    }));
+    await diagRelayPromise;
+    assert(diagRelayedToFrontend, 'ESP32 live diagnostics successfully broadcast from ESP32 -> Render -> Frontend');
+
     // Clean up sockets
     frontendSocket.close();
     esp32Socket.close();

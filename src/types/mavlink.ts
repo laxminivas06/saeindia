@@ -171,8 +171,6 @@ export interface PixhawkConnectionState {
   lastArmParam2?: number;
   lastArmWsSendState?: 'START' | 'COMPLETE' | 'FAILED';
   lastArmAckResult?: string;
-  esp32WsRxBytes?: number;
-  esp32PixhawkTxBytes?: number;
   esp32LinkState?: 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED' | 'RECONNECTING' | 'ERROR';
   esp32ProtocolMode?: 'AUTO' | 'WS' | 'WSS';
   esp32Path?: string;
@@ -181,6 +179,22 @@ export interface PixhawkConnectionState {
   esp32ErrorMessage?: string;
   esp32ConnectorOnline?: boolean;
   esp32DeviceOnline?: boolean;
+  // Stage Diagnostic Counters & States (Prompt Requirements 2, 5, 8, 20, 25)
+  esp32WifiConnected?: boolean;
+  esp32WifiRssi?: number;
+  esp32WifiIp?: string;
+  esp32WssConnected?: boolean;
+  esp32UartRxBytes?: number;
+  esp32UartTxBytes?: number;
+  esp32WsTxBytes?: number;
+  esp32WsRxBytes?: number;
+  esp32MavlinkRxPackets?: number;
+  esp32MavlinkHeartbeats?: number;
+  esp32MavlinkHeartbeatDetected?: boolean;
+  esp32DiagnosticCase?: string;
+  esp32LastPacketAgeMs?: number | null;
+  renderHttpOnline?: boolean;
+  connectionSummaryState?: 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED_NO_TELEMETRY' | 'ACTIVE_STREAMING';
   diagnostics: UsbDeviceDiagnostics;
 }
 

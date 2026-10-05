@@ -77,7 +77,23 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
   private lastErrorMessage: string = '';
   private latencyMs: number = 0;
   private connectStartTime: number = 0;
+  private connectedTimestamp: number = 0;
   private lastPingSentTime: number = 0;
+
+  // Live ESP32 Hardware Diagnostics (from ESP32_DIAGNOSTICS message)
+  private esp32WifiConnected: boolean = false;
+  private esp32WifiRssi: number = 0;
+  private esp32WifiIp: string = '';
+  private esp32WssConnected: boolean = false;
+  private esp32UartRxBytes: number = 0;
+  private esp32UartTxBytes: number = 0;
+  private esp32WsTxBytes: number = 0;
+  private esp32WsRxBytes: number = 0;
+  private esp32MavlinkRxPackets: number = 0;
+  private esp32MavlinkHeartbeats: number = 0;
+  private esp32MavlinkHeartbeatDetected: boolean = false;
+  private esp32DiagnosticCase: string = 'CHECKING';
+  private lastEsp32DiagTimestamp: number = 0;
 
   // Cloud Health Cache
   private lastCloudHealth: CloudHealthResult = { reachable: false, message: 'Not checked yet' };
@@ -641,6 +657,7 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
                 this.clearAllTimers();
                 this.isConnecting = false;
                 this.ackReceived = true;
+                this.connectedTimestamp = Date.now();
                 this.reconnectAttempts = 0; // Reset counter on successful connection
                 this.linkState = 'CONNECTED';
                 this.relayOnline = true;
@@ -674,11 +691,52 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
                 return;
               }
 
-              // 2. Relay Status Broadcast
+              // 2. ESP32 Live Hardware Diagnostics
+              if (msg.type === 'ESP32_DIAGNOSTICS') {
+                this.esp32Online = true;
+                this.esp32WifiConnected = Boolean(msg.wifi_connected);
+                this.esp32WifiRssi = Number(msg.wifi_rssi) || 0;
+                this.esp32WifiIp = String(msg.wifi_ip || '');
+                this.esp32WssConnected = Boolean(msg.wss_connected);
+                this.esp32UartRxBytes = Number(msg.raw_uart_rx_bytes) || 0;
+                this.esp32UartTxBytes = Number(msg.raw_uart_tx_bytes) || 0;
+                this.esp32WsTxBytes = Number(msg.ws_tx_bytes) || 0;
+                this.esp32WsRxBytes = Number(msg.ws_rx_bytes) || 0;
+                this.esp32MavlinkRxPackets = Number(msg.mavlink_rx_packets) || 0;
+                this.esp32MavlinkHeartbeats = Number(msg.mavlink_heartbeats) || 0;
+                this.esp32MavlinkHeartbeatDetected = Boolean(msg.mavlink_heartbeat);
+                this.esp32DiagnosticCase = String(msg.diagnostic_case || 'OK');
+                this.lastEsp32DiagTimestamp = Date.now();
+
+                this.notifyState({
+                  phase: this.linkState === 'CONNECTED' ? 'SERIAL_OPEN' : 'SERIAL_OPENING',
+                  message: `ESP32 Diag: UART RX ${this.esp32UartRxBytes} B, MAVLink ${this.esp32MavlinkRxPackets} pkts (${this.esp32DiagnosticCase})`
+                });
+                return;
+              }
+
+              // 3. Relay Status Broadcast
               if (msg.type === 'RELAY_STATUS') {
                 this.relayOnline = true;
                 this.connectorOnline = Boolean(msg.connectorOnline);
                 this.esp32Online = Boolean(msg.esp32Online);
+
+                if (msg.esp32Diagnostics) {
+                  const d = msg.esp32Diagnostics;
+                  this.esp32WifiConnected = Boolean(d.wifi_connected);
+                  this.esp32WifiRssi = Number(d.wifi_rssi) || 0;
+                  this.esp32WifiIp = String(d.wifi_ip || '');
+                  this.esp32WssConnected = Boolean(d.wss_connected);
+                  this.esp32UartRxBytes = Number(d.raw_uart_rx_bytes) || 0;
+                  this.esp32UartTxBytes = Number(d.raw_uart_tx_bytes) || 0;
+                  this.esp32WsTxBytes = Number(d.ws_tx_bytes) || 0;
+                  this.esp32WsRxBytes = Number(d.ws_rx_bytes) || 0;
+                  this.esp32MavlinkRxPackets = Number(d.mavlink_rx_packets) || 0;
+                  this.esp32MavlinkHeartbeats = Number(d.mavlink_heartbeats) || 0;
+                  this.esp32MavlinkHeartbeatDetected = Boolean(d.mavlink_heartbeat);
+                  this.esp32DiagnosticCase = String(d.diagnostic_case || 'OK');
+                  this.lastEsp32DiagTimestamp = Date.now();
+                }
 
                 this.notifyState({
                   phase: this.linkState === 'CONNECTED' ? 'SERIAL_OPEN' : 'SERIAL_OPENING',
@@ -689,7 +747,7 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
                 return;
               }
 
-              // 3. Heartbeat Pong Response
+              // 4. Heartbeat Pong Response
               if (msg.type === 'pong') {
                 const roundTrip = Date.now() - (msg.timestamp || this.lastPingSentTime || Date.now());
                 this.latencyMs = Math.max(1, roundTrip);
@@ -697,7 +755,7 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
                 return;
               }
 
-              // 4. Test Message Acknowledgement
+              // 5. Test Message Acknowledgement
               if (msg.type === 'test_ack' || msg.type === 'test_relay') {
                 console.log('[WSS] Test message event:', msg);
                 return;
@@ -974,7 +1032,51 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
       bytesSent: this.cumulativeTxBytes,
       lastPacketTimestamp: this.lastPacketTimestamp,
       lastPacketAgeMs: this.lastPacketTimestamp > 0 ? Date.now() - this.lastPacketTimestamp : null,
-      cloudHealth: this.lastCloudHealth
+      cloudHealth: this.lastCloudHealth,
+      // Live ESP32 Hardware Diagnostics
+      esp32WifiConnected: this.esp32WifiConnected,
+      esp32WifiRssi: this.esp32WifiRssi,
+      esp32WifiIp: this.esp32WifiIp,
+      esp32WssConnected: this.esp32WssConnected,
+      esp32UartRxBytes: this.esp32UartRxBytes,
+      esp32UartTxBytes: this.esp32UartTxBytes,
+      esp32WsTxBytes: this.esp32WsTxBytes,
+      esp32WsRxBytes: this.esp32WsRxBytes,
+      esp32MavlinkRxPackets: this.esp32MavlinkRxPackets,
+      esp32MavlinkHeartbeats: this.esp32MavlinkHeartbeats,
+      esp32MavlinkHeartbeatDetected: this.esp32MavlinkHeartbeatDetected,
+      esp32DiagnosticCase: this.esp32DiagnosticCase,
+      renderHttpOnline: this.lastCloudHealth.reachable,
+      connectionSummaryState: this.getConnectionSummaryState()
     };
   }
+
+  public getConnectionSummaryState(): 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED_NO_TELEMETRY' | 'ACTIVE_STREAMING' {
+    if (this.linkState === 'DISCONNECTED') return 'DISCONNECTED';
+    if (this.linkState === 'CONNECTING' || this.isConnecting) return 'CONNECTING';
+    if (this.linkState === 'CONNECTED') {
+      if (this.cumulativeRxBytes > 0) return 'ACTIVE_STREAMING';
+      const connectedDuration = this.connectedTimestamp > 0 ? (Date.now() - this.connectedTimestamp) : 0;
+      if (connectedDuration > 5000) {
+        return 'CONNECTED_NO_TELEMETRY';
+      }
+      return 'CONNECTING';
+    }
+    return 'DISCONNECTED';
+  }
+
+  public getRxBytes(): number { return this.cumulativeRxBytes; }
+  public getTxBytes(): number { return this.cumulativeTxBytes; }
+  public getEsp32WifiConnected(): boolean { return this.esp32WifiConnected; }
+  public getEsp32WifiRssi(): number { return this.esp32WifiRssi; }
+  public getEsp32WifiIp(): string { return this.esp32WifiIp; }
+  public getEsp32WssConnected(): boolean { return this.esp32WssConnected; }
+  public getEsp32UartRxBytes(): number { return this.esp32UartRxBytes; }
+  public getEsp32UartTxBytes(): number { return this.esp32UartTxBytes; }
+  public getEsp32WsTxBytes(): number { return this.esp32WsTxBytes; }
+  public getEsp32WsRxBytes(): number { return this.esp32WsRxBytes; }
+  public getEsp32MavlinkRxPackets(): number { return this.esp32MavlinkRxPackets; }
+  public getEsp32MavlinkHeartbeats(): number { return this.esp32MavlinkHeartbeats; }
+  public getEsp32MavlinkHeartbeatDetected(): boolean { return this.esp32MavlinkHeartbeatDetected; }
+  public getEsp32DiagnosticCase(): string { return this.esp32DiagnosticCase; }
 }

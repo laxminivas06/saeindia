@@ -45,6 +45,7 @@ let txBytesTotal = 0;
 let packetsForwarded = 0;
 let esp32LastSeen = 0;
 let lastHeartbeatTime = Date.now();
+let latestEsp32Diagnostics = null;
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -76,6 +77,7 @@ function broadcastRelayStatus() {
     rxBytesTotal,
     txBytesTotal,
     packetsForwarded,
+    esp32Diagnostics: latestEsp32Diagnostics,
     timestamp: Date.now()
   });
 
@@ -126,6 +128,7 @@ const server = http.createServer((req, res) => {
       rxBytesTotal,
       txBytesTotal,
       packetsForwarded,
+      esp32Diagnostics: latestEsp32Diagnostics,
       timestamp: Date.now()
     }, null, 2));
     return;
@@ -290,8 +293,12 @@ function handleClientConnection(ws, request, pathname, query) {
         esp32ClientsCount: esp32Sockets.size,
         frontendClientsCount: frontendSockets.size,
         esp32LastSeen,
+        esp32Diagnostics: latestEsp32Diagnostics,
         timestamp: Date.now()
       }));
+      if (latestEsp32Diagnostics) {
+        ws.send(JSON.stringify(latestEsp32Diagnostics));
+      }
     } catch (e) {}
   }
 
@@ -324,7 +331,7 @@ function handleClientConnection(ws, request, pathname, query) {
               }
             }
           }
-          console.log(`[WS] Message forwarded: ESP32 -> ${frontendSockets.size} Frontend(s) (${length} bytes)`);
+          console.log(`[RELAY] ESP32 -> Frontend bytes: ${length}`);
         }
       } else {
         // Frontend -> Render -> All ESP32 Devices
@@ -340,7 +347,7 @@ function handleClientConnection(ws, request, pathname, query) {
               }
             }
           }
-          console.log(`[WS] Message forwarded: Frontend -> ESP32 (${length} bytes)`);
+          console.log(`[RELAY] Frontend -> ESP32 bytes: ${length}`);
         } else {
           console.warn(`[WS] Command dropped: Frontend sent ${length} bytes but no ESP32 is currently connected to relay.`);
         }
@@ -363,13 +370,13 @@ function handleClientConnection(ws, request, pathname, query) {
           ws.clientType = 'esp32';
           ws.deviceId = msg.device_id || 'esp32-drone';
           esp32LastSeen = Date.now();
-          console.log(`[WS] ESP32 connected (Client registered: ${ws.deviceId})`);
+          console.log(`[RELAY] ESP32 connected (Client registered: ${ws.deviceId})`);
           broadcastRelayStatus();
         } else if (targetType === 'frontend' && ws.clientType !== 'frontend') {
           esp32Sockets.delete(ws);
           frontendSockets.add(ws);
           ws.clientType = 'frontend';
-          console.log(`[WS] Frontend connected (Client registered)`);
+          console.log(`[RELAY] Frontend connected (Client registered)`);
           broadcastRelayStatus();
         }
 
@@ -384,7 +391,27 @@ function handleClientConnection(ws, request, pathname, query) {
         return;
       }
 
-      // 2. Legacy ESP32 Status Message
+      // 2. ESP32 Live Diagnostics Broadcast (UART RX/TX, WSS RX/TX, MAVLink Heartbeat)
+      if (msg.type === 'ESP32_DIAGNOSTICS') {
+        if (ws.clientType !== 'esp32') {
+          frontendSockets.delete(ws);
+          esp32Sockets.add(ws);
+          ws.clientType = 'esp32';
+        }
+        esp32LastSeen = Date.now();
+        latestEsp32Diagnostics = msg;
+        console.log(`[RELAY] ESP32 Diagnostics: UART RX: ${msg.raw_uart_rx_bytes}B, WSS TX: ${msg.ws_tx_bytes}B, Heartbeat: ${msg.mavlink_heartbeat ? 'YES' : 'NO'}`);
+
+        // Broadcast to all frontend Ground Stations
+        for (const client of frontendSockets) {
+          if (client.readyState === WebSocket.OPEN) {
+            try { client.send(text); } catch (e) {}
+          }
+        }
+        return;
+      }
+
+      // 3. Legacy ESP32 Status Message
       if (msg.type === 'ESP32_STATUS') {
         if (ws.clientType !== 'esp32') {
           frontendSockets.delete(ws);
