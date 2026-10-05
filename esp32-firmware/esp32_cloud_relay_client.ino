@@ -111,6 +111,7 @@ uint8_t mavlink_system_id = 0;
 uint8_t mavlink_component_id = 0;
 uint32_t mavlink_custom_mode = 0;
 bool drone_is_armed = false;
+uint8_t mavlink_gps_fix = 0; // 0=No GPS, 1=No Fix, 2=2D, 3=3D Fix
 
 // Timers
 unsigned long lastPingTime = 0;
@@ -178,6 +179,10 @@ void inspectMavlinkBuffer(const uint8_t *buf, size_t len) {
           uint8_t baseMode = buf[i + 16];
           drone_is_armed = (baseMode & 128) != 0;
         }
+      } else if (msgId == 24) { // GPS_RAW_INT (fix_type is at payload offset 28)
+        if ((i + 10 + 29) <= len) {
+          mavlink_gps_fix = buf[i + 10 + 28];
+        }
       }
     }
     // Check MAVLink v1 magic byte (0xFE)
@@ -194,6 +199,10 @@ void inspectMavlinkBuffer(const uint8_t *buf, size_t len) {
         mavlink_heartbeats_rx++;
         mavlink_heartbeat_detected = true;
         last_heartbeat_time = millis();
+      } else if (msgId == 24) { // GPS_RAW_INT
+        if ((i + 6 + 29) <= len) {
+          mavlink_gps_fix = buf[i + 6 + 28];
+        }
       }
     }
   }
