@@ -207,7 +207,7 @@ export const HardwareConnectionModal: React.FC<HardwareConnectionModalProps> = (
                     <span>Deployed Cloud Relay Link (Active)</span>
                   </div>
                   <div>
-                    Once the ESP32 connects to your hotspot, it automatically reaches the Render Cloud Relay at <code className="bg-slate-900 px-1 py-0.5 rounded text-sky-300">wss://saeindia-szj0.onrender.com/connector</code> without requiring port forwarding.
+                    Once the ESP32 connects to your hotspot, it automatically reaches the Render Cloud Relay at <code className="bg-slate-900 px-1 py-0.5 rounded text-sky-300">wss://saeindia-szj0.onrender.com/ws</code> without requiring port forwarding.
                   </div>
                   <div>
                     Your web app on <code className="bg-slate-900 px-1 py-0.5 rounded text-sky-300">https://saeindiasphn.netlify.app/</code> connects directly via <code className="bg-slate-900 px-1 py-0.5 rounded text-sky-300">wss://saeindia-szj0.onrender.com/ws</code>.

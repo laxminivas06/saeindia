@@ -770,6 +770,14 @@ class MAVLinkService {
     return await usbHostService.checkEsp32Http(host, port);
   }
 
+  public async checkCloudServerHealth(): Promise<import('./transports/Esp32WebSocketTransport').CloudHealthResult> {
+    return await usbHostService.checkCloudServerHealth();
+  }
+
+  public sendRelayTestMessage(message?: string): boolean {
+    return usbHostService.sendRelayTestMessage(message);
+  }
+
   public async scanUsbDevices(): Promise<any[]> {
     this.logDiagnostic('USB', 'Scanning connected USB devices on USB Host...', 'info');
     return await usbHostService.scanUsbDevices();

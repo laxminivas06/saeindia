@@ -1,20 +1,6 @@
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
-import { parse } from 'url';
-
-const PORT = process.env.PORT || 8443;
-const RELAY_TOKEN = process.env.RELAY_TOKEN || 'saeindia_secret_token_2026';
-
-// Global relay state
-let connectorSocket = null;
-let esp32Online = false;
-let esp32LastError = '';
-const browserSockets = new Set();
-
-let rxBytesTotal = 0;
-let txBytesTotal = 0;
-let packetsForwarded = 0;
-
+// Use WHATWG URL API
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -22,6 +8,43 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DIST_DIR = path.resolve(__dirname, '../dist');
+
+// Configuration
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 8443;
+const RELAY_TOKEN = (process.env.RELAY_TOKEN || 'saeindia_sec_99348a7b1c0e').trim();
+
+// Allowed Origins for CORS and WebSocket
+const ALLOWED_ORIGINS = new Set([
+  'https://saeindiasphn.netlify.app',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  'http://localhost:8443',
+  'http://localhost:8080',
+  'capacitor://localhost',
+  'http://localhost'
+]);
+
+function isOriginAllowed(origin) {
+  if (!origin) return true; // Non-browser clients (ESP32, curl, local scripts) have no origin
+  if (ALLOWED_ORIGINS.has(origin)) return true;
+  if (/^https:\/\/[a-z0-9-]+--saeindiasphn\.netlify\.app$/.test(origin)) return true; // Netlify preview deploys
+  if (/^https:\/\/[a-z0-9-]+\.netlify\.app$/.test(origin)) return true;
+  return false;
+}
+
+// Global Client Tracking
+const frontendSockets = new Set();
+const esp32Sockets = new Set();
+let clientCounter = 0;
+
+// Telemetry & Diagnostic Metrics
+let rxBytesTotal = 0;
+let txBytesTotal = 0;
+let packetsForwarded = 0;
+let esp32LastSeen = 0;
+let lastHeartbeatTime = Date.now();
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -38,33 +61,77 @@ const MIME_TYPES = {
   '.map': 'application/json'
 };
 
-// Create HTTP server for static SPA assets, health checks & WebSocket upgrades
-const server = http.createServer((req, res) => {
-  const parsedUrl = parse(req.url, true);
-  const pathname = parsedUrl.pathname || '/';
+// Broadcast relay state to all connected frontends
+function broadcastRelayStatus() {
+  const esp32Connected = esp32Sockets.size > 0;
+  const statusMsg = JSON.stringify({
+    type: 'RELAY_STATUS',
+    relayOnline: true,
+    server: 'sae-india-drone-relay',
+    esp32Online: esp32Connected,
+    connectorOnline: esp32Connected,
+    esp32ClientsCount: esp32Sockets.size,
+    frontendClientsCount: frontendSockets.size,
+    esp32LastSeen,
+    rxBytesTotal,
+    txBytesTotal,
+    packetsForwarded,
+    timestamp: Date.now()
+  });
 
-  // 1. Health status endpoint for telemetry / monitoring
+  for (const client of frontendSockets) {
+    if (client.readyState === WebSocket.OPEN) {
+      try {
+        client.send(statusMsg);
+      } catch (err) {
+        // Socket send error handled in error listener
+      }
+    }
+  }
+}
+
+// HTTP Server: Handles /health, CORS preflights, static assets & WebSocket upgrade handshakes
+const server = http.createServer((req, res) => {
+  const parsedUrl = new URL(req.url, 'http://localhost');
+  const pathname = parsedUrl.pathname || '/';
+  const origin = req.headers.origin;
+
+  // Handle CORS headers
+  const allowOrigin = isOriginAllowed(origin) ? (origin || '*') : 'https://saeindiasphn.netlify.app';
+  res.setHeader('Access-Control-Allow-Origin', allowOrigin);
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Relay-Token, X-Client-Type');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  // 1. Health Status Endpoints (/health, /api/health)
   if (pathname === '/health' || pathname === '/api/health') {
-    res.writeHead(200, {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*'
-    });
+    res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
-      service: 'SAE INDIA MAVLink Secure WSS Relay',
       status: 'ok',
-      uptime: process.uptime(),
-      connectorOnline: connectorSocket !== null && connectorSocket.readyState === WebSocket.OPEN,
-      esp32Online,
-      esp32LastError,
-      browserClientsCount: browserSockets.size,
+      service: 'sae-india-drone-relay',
+      websocket: true,
+      endpoint: '/ws',
+      uptime: Math.floor(process.uptime()),
+      esp32Connected: esp32Sockets.size > 0,
+      esp32Online: esp32Sockets.size > 0,
+      frontendClientsCount: frontendSockets.size,
+      esp32ClientsCount: esp32Sockets.size,
+      totalClientsCount: frontendSockets.size + esp32Sockets.size,
       rxBytesTotal,
       txBytesTotal,
-      packetsForwarded
+      packetsForwarded,
+      timestamp: Date.now()
     }, null, 2));
     return;
   }
 
-  // 2. Static Asset Serving from dist/ (Requirements 1, 2, 3)
+  // 2. Static Asset Serving from dist/ (if built)
   if (fs.existsSync(DIST_DIR)) {
     let filePath = path.join(DIST_DIR, pathname);
     
@@ -75,7 +142,6 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    // If request is for a file that exists directly
     if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
       const ext = path.extname(filePath).toLowerCase();
       const contentType = MIME_TYPES[ext] || 'application/octet-stream';
@@ -90,236 +156,379 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    // SPA Fallback: Any route without a file extension serves index.html locally
+    // SPA Fallback: Any path without an extension falls back to index.html
     const indexPath = path.join(DIST_DIR, 'index.html');
     if (fs.existsSync(indexPath)) {
       res.writeHead(200, {
         'Content-Type': 'text/html; charset=utf-8',
-        'Cache-Control': 'no-cache',
-        'X-Frame-Options': 'SAMEORIGIN'
+        'Cache-Control': 'no-cache'
       });
       fs.createReadStream(indexPath).pipe(res);
       return;
     }
   }
 
-  // Fallback if dist hasn't been built yet
+  // 3. Root Fallback Info
   if (pathname === '/') {
-    res.writeHead(200, {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*'
-    });
+    res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
-      service: 'SAE INDIA MAVLink Secure WSS Relay',
+      service: 'sae-india-drone-relay',
       status: 'ok',
-      message: 'Relay online. Build frontend with `npm run build` to serve SPA statically.',
-      uptime: process.uptime()
+      message: 'SAE INDIA Drone Ground Station WSS Relay is online.',
+      endpoints: {
+        health: '/health',
+        websocket: '/ws',
+        connector: '/connector'
+      },
+      uptime: Math.floor(process.uptime()),
+      connectedFrontends: frontendSockets.size,
+      connectedEsp32: esp32Sockets.size
     }, null, 2));
     return;
   }
 
-  res.writeHead(404, { 'Content-Type': 'text/plain' });
-  res.end('Not Found');
+  res.writeHead(404, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error: 'Not Found', path: pathname }));
 });
 
-// Create WebSocket server attached to HTTP server
+// WebSocket Server attached to HTTP Server
 const wss = new WebSocketServer({ noServer: true });
 
-function broadcastStatusToBrowsers() {
-  const statusMsg = JSON.stringify({
-    type: 'RELAY_STATUS',
-    connectorOnline: connectorSocket !== null && connectorSocket.readyState === WebSocket.OPEN,
-    esp32Online: connectorSocket !== null && connectorSocket.readyState === WebSocket.OPEN && esp32Online,
-    error: connectorSocket === null 
-      ? 'ESP32 connector offline' 
-      : (!esp32Online ? (esp32LastError || 'ESP32 unavailable') : null)
-  });
-
-  for (const client of browserSockets) {
-    if (client.readyState === WebSocket.OPEN) {
-      try {
-        client.send(statusMsg);
-      } catch (err) {
-        // ignore send error
-      }
-    }
-  }
-}
-
-// Upgrade handler with token authentication and routing
+// Upgrade Handler
 server.on('upgrade', (request, socket, head) => {
-  const parsedUrl = parse(request.url, true);
-  const pathname = parsedUrl.pathname;
-  const token = parsedUrl.query.token || request.headers['x-relay-token'];
+  const parsedUrl = new URL(request.url, 'http://localhost');
+  const pathname = parsedUrl.pathname || '/';
+  const origin = request.headers.origin;
+  const remoteAddr = request.socket.remoteAddress || 'unknown';
 
-  // Validate authentication token if configured (accept configured token or known system tokens)
-  const allowedTokens = new Set([
-    RELAY_TOKEN.trim(),
-    'saeindia_sec_99348a7b1c0e',
-    'saeindia_secret_token_2026'
-  ]);
+  console.log(`[WS] Upgrade request from ${remoteAddr} for path '${pathname}' (Origin: ${origin || 'none'})`);
 
-  if (RELAY_TOKEN && RELAY_TOKEN.trim().length > 0) {
-    if (!token || !allowedTokens.has(token.trim())) {
-      console.warn(`[AUTH FAILED] Unauthorized connection attempt to ${pathname} from ${request.socket.remoteAddress} (provided: "${token}")`);
-      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-      socket.destroy();
-      return;
-    }
+  // Origin check for browser clients
+  if (origin && !isOriginAllowed(origin)) {
+    console.warn(`[WS] Connection rejected: Origin not allowed '${origin}'`);
+    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+    socket.destroy();
+    return;
   }
 
-  // Route: /connector (for local connector agent)
-  if (pathname === '/connector') {
+  // Valid routes: /ws, /connector, or root /
+  if (pathname === '/ws' || pathname === '/connector' || pathname === '/') {
     wss.handleUpgrade(request, socket, head, (ws) => {
-      handleConnectorConnection(ws);
+      const queryObj = Object.fromEntries(parsedUrl.searchParams.entries());
+      handleClientConnection(ws, request, pathname, queryObj);
     });
     return;
   }
 
-  // Route: /ws or / (for frontend browser client)
-  if (pathname === '/ws' || pathname === '/') {
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      handleBrowserConnection(ws);
-    });
-    return;
-  }
-
+  console.warn(`[WS] Unknown WebSocket path requested: ${pathname}`);
   socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
   socket.destroy();
 });
 
-// Handle Local Connector Agent connection
-function handleConnectorConnection(ws) {
-  console.log('[CONNECTOR] Local connector connected successfully.');
-  
-  if (connectorSocket && connectorSocket !== ws) {
-    console.warn('[CONNECTOR] Replacing existing connector instance.');
+// Unified Connection Handler
+function handleClientConnection(ws, request, pathname, query) {
+  const clientId = ++clientCounter;
+  const remoteAddr = request.socket.remoteAddress || 'unknown';
+
+  ws.isAlive = true;
+  ws.clientId = clientId;
+
+  // Determine initial client role
+  // 1. Explicit query param (?client=esp32 or ?client=frontend)
+  // 2. Path: /connector defaults to esp32
+  // 3. Header: x-client-type
+  // 4. Default: frontend
+  let clientType = 'frontend';
+  if (query.client === 'esp32' || pathname === '/connector' || request.headers['x-client-type'] === 'esp32') {
+    clientType = 'esp32';
+  } else if (query.client === 'frontend' || request.headers['x-client-type'] === 'frontend') {
+    clientType = 'frontend';
+  }
+
+  ws.clientType = clientType;
+
+  console.log(`[WS] Client connected (ID: ${clientId}, Remote: ${remoteAddr}, Type: ${clientType}, Path: ${pathname})`);
+
+  // Register into appropriate set
+  if (clientType === 'esp32') {
+    esp32Sockets.add(ws);
+    esp32LastSeen = Date.now();
+    console.log(`[WS] ESP32 connected (Total ESP32: ${esp32Sockets.size})`);
+    broadcastRelayStatus();
+  } else {
+    frontendSockets.add(ws);
+    console.log(`[WS] Frontend connected (Total Frontends: ${frontendSockets.size})`);
+  }
+
+  // Mandatory Connection Acknowledgement
+  const ackMessage = JSON.stringify({
+    type: 'connection_ack',
+    status: 'connected',
+    server: 'sae-india-drone-relay',
+    client: clientType,
+    clientId,
+    endpoint: pathname,
+    esp32Online: esp32Sockets.size > 0,
+    timestamp: Date.now()
+  });
+
+  try {
+    ws.send(ackMessage);
+  } catch (err) {
+    console.error(`[WS] Connection error sending ack to client ${clientId}:`, err.message);
+  }
+
+  // Also send current relay status to newly connected frontends
+  if (clientType === 'frontend') {
     try {
-      connectorSocket.close(1000, 'Superseded by new connector');
+      ws.send(JSON.stringify({
+        type: 'RELAY_STATUS',
+        relayOnline: true,
+        server: 'sae-india-drone-relay',
+        esp32Online: esp32Sockets.size > 0,
+        connectorOnline: esp32Sockets.size > 0,
+        esp32ClientsCount: esp32Sockets.size,
+        frontendClientsCount: frontendSockets.size,
+        esp32LastSeen,
+        timestamp: Date.now()
+      }));
     } catch (e) {}
   }
 
-  connectorSocket = ws;
-  esp32Online = true;
-  esp32LastError = '';
+  // Pong handler for keepalive tracking
+  ws.on('pong', () => {
+    ws.isAlive = true;
+  });
 
-  // Notify all browsers that connector / ESP32 is now online
-  broadcastStatusToBrowsers();
-
+  // Message Handler
   ws.on('message', (data, isBinary) => {
+    ws.isAlive = true;
+
+    // --- CASE A: Binary Frame (Raw MAVLink Telemetry or Command) ---
     if (isBinary) {
-      if (!esp32Online) {
-        esp32Online = true;
-        broadcastStatusToBrowsers();
+      const length = data.length || (data.byteLength !== undefined ? data.byteLength : 0);
+      
+      if (ws.clientType === 'esp32') {
+        // ESP32 -> Render -> All Frontends
+        rxBytesTotal += length;
+        packetsForwarded++;
+        esp32LastSeen = Date.now();
+
+        if (frontendSockets.size > 0) {
+          for (const client of frontendSockets) {
+            if (client.readyState === WebSocket.OPEN) {
+              try {
+                client.send(data, { binary: true });
+              } catch (e) {
+                console.error(`[WS] Connection error forwarding binary to frontend ${client.clientId}:`, e.message);
+              }
+            }
+          }
+          console.log(`[WS] Message forwarded: ESP32 -> ${frontendSockets.size} Frontend(s) (${length} bytes)`);
+        }
+      } else {
+        // Frontend -> Render -> All ESP32 Devices
+        txBytesTotal += length;
+
+        if (esp32Sockets.size > 0) {
+          for (const esp of esp32Sockets) {
+            if (esp.readyState === WebSocket.OPEN) {
+              try {
+                esp.send(data, { binary: true });
+              } catch (e) {
+                console.error(`[WS] Connection error forwarding binary to ESP32 ${esp.clientId}:`, e.message);
+              }
+            }
+          }
+          console.log(`[WS] Message forwarded: Frontend -> ESP32 (${length} bytes)`);
+        } else {
+          console.warn(`[WS] Command dropped: Frontend sent ${length} bytes but no ESP32 is currently connected to relay.`);
+        }
       }
-      // Binary frame from ESP32 -> Forward to all connected browsers
-      rxBytesTotal += data.length;
-      packetsForwarded++;
-      for (const browser of browserSockets) {
-        if (browser.readyState === WebSocket.OPEN) {
-          try {
-            browser.send(data, { binary: true });
-          } catch (e) {
-            console.error('[FORWARD ERROR] Failed to send to browser:', e);
+      return;
+    }
+
+    // --- CASE B: Text / JSON Message ---
+    try {
+      const text = data.toString();
+      const msg = JSON.parse(text);
+      console.log(`[WS] Message received from ${ws.clientType} (${ws.clientId}): ${msg.type || 'text'}`);
+
+      // 1. Explicit Client Registration Handshake
+      if (msg.type === 'register') {
+        const targetType = (msg.client || '').toLowerCase();
+        if (targetType === 'esp32' && ws.clientType !== 'esp32') {
+          frontendSockets.delete(ws);
+          esp32Sockets.add(ws);
+          ws.clientType = 'esp32';
+          ws.deviceId = msg.device_id || 'esp32-drone';
+          esp32LastSeen = Date.now();
+          console.log(`[WS] ESP32 connected (Client registered: ${ws.deviceId})`);
+          broadcastRelayStatus();
+        } else if (targetType === 'frontend' && ws.clientType !== 'frontend') {
+          esp32Sockets.delete(ws);
+          frontendSockets.add(ws);
+          ws.clientType = 'frontend';
+          console.log(`[WS] Frontend connected (Client registered)`);
+          broadcastRelayStatus();
+        }
+
+        // Acknowledge registration
+        ws.send(JSON.stringify({
+          type: 'register_ack',
+          status: 'ok',
+          client: ws.clientType,
+          deviceId: ws.deviceId || null,
+          timestamp: Date.now()
+        }));
+        return;
+      }
+
+      // 2. Legacy ESP32 Status Message
+      if (msg.type === 'ESP32_STATUS') {
+        if (ws.clientType !== 'esp32') {
+          frontendSockets.delete(ws);
+          esp32Sockets.add(ws);
+          ws.clientType = 'esp32';
+          console.log(`[WS] ESP32 connected via ESP32_STATUS handshake.`);
+        }
+        esp32LastSeen = Date.now();
+        broadcastRelayStatus();
+        return;
+      }
+
+      // 3. Heartbeat Ping / Pong
+      if (msg.type === 'ping') {
+        console.log(`[WS] Heartbeat ping from ${ws.clientType} (${ws.clientId})`);
+        try {
+          ws.send(JSON.stringify({
+            type: 'pong',
+            timestamp: msg.timestamp || Date.now(),
+            serverTimestamp: Date.now()
+          }));
+        } catch (e) {}
+        return;
+      }
+
+      if (msg.type === 'pong') {
+        ws.isAlive = true;
+        return;
+      }
+
+      // 4. Test Relay Message
+      if (msg.type === 'test') {
+        console.log(`[WS] Test message received from ${ws.clientType}: "${msg.message}"`);
+        // Echo back to sender
+        ws.send(JSON.stringify({
+          type: 'test_ack',
+          status: 'ok',
+          received: msg.message,
+          relayedTo: ws.clientType === 'frontend' ? `esp32 (${esp32Sockets.size})` : `frontends (${frontendSockets.size})`,
+          timestamp: Date.now()
+        }));
+
+        // Forward to the opposite party
+        const forwardTarget = ws.clientType === 'frontend' ? esp32Sockets : frontendSockets;
+        const relayPayload = JSON.stringify({
+          type: 'test_relay',
+          from: ws.clientType,
+          message: msg.message,
+          timestamp: Date.now()
+        });
+
+        for (const target of forwardTarget) {
+          if (target.readyState === WebSocket.OPEN) {
+            try {
+              target.send(relayPayload);
+            } catch (e) {}
+          }
+        }
+        console.log(`[WS] Message forwarded test message to ${forwardTarget.size} recipient(s)`);
+        return;
+      }
+
+      // 5. Default: Relay any arbitrary JSON message between ESP32 and Frontend
+      if (ws.clientType === 'esp32') {
+        for (const client of frontendSockets) {
+          if (client.readyState === WebSocket.OPEN) {
+            try { client.send(text); } catch (e) {}
+          }
+        }
+      } else {
+        for (const esp of esp32Sockets) {
+          if (esp.readyState === WebSocket.OPEN) {
+            try { esp.send(text); } catch (e) {}
           }
         }
       }
-    } else {
-      // JSON control message from local connector
-      try {
-        const text = data.toString();
-        const msg = JSON.parse(text);
-        if (msg.type === 'ESP32_STATUS') {
-          esp32Online = msg.status === 'CONNECTED';
-          esp32LastError = msg.error || '';
-          console.log(`[CONNECTOR REPORT] ESP32 status changed to: ${msg.status} ${esp32LastError ? `(${esp32LastError})` : ''}`);
-          broadcastStatusToBrowsers();
-        }
-      } catch (err) {
-        console.warn('[CONNECTOR] Non-JSON text message received:', data.toString());
-      }
+
+    } catch (err) {
+      console.warn(`[WS] Non-JSON text received from ${ws.clientType} (${ws.clientId}):`, data.toString().slice(0, 100));
     }
   });
 
+  // Close Handler
   ws.on('close', (code, reason) => {
-    console.warn(`[CONNECTOR] Local connector disconnected (${code}: ${reason || 'No reason'}).`);
-    if (connectorSocket === ws) {
-      connectorSocket = null;
-      esp32Online = false;
-      esp32LastError = 'ESP32 connector offline';
-      broadcastStatusToBrowsers();
+    const reasonStr = reason ? reason.toString() : 'None';
+    console.log(`[WS] Client disconnected (ID: ${clientId}, Type: ${ws.clientType}, Code: ${code}, Reason: ${reasonStr})`);
+
+    if (ws.clientType === 'esp32') {
+      esp32Sockets.delete(ws);
+      console.log(`[WS] ESP32 disconnected (Remaining ESP32: ${esp32Sockets.size})`);
+      broadcastRelayStatus();
+    } else {
+      frontendSockets.delete(ws);
+      console.log(`[WS] Frontend disconnected (Remaining Frontends: ${frontendSockets.size})`);
     }
   });
 
+  // Error Handler
   ws.on('error', (err) => {
-    console.error('[CONNECTOR ERROR]', err.message);
+    console.error(`[WS] Connection error (ID: ${clientId}, Type: ${ws.clientType}):`, err.message);
   });
 }
 
-// Handle Browser Frontend connection
-function handleBrowserConnection(ws) {
-  console.log(`[BROWSER] Frontend client connected (Total: ${browserSockets.size + 1})`);
-  browserSockets.add(ws);
-
-  // Immediately send initial status to the browser
-  const initialStatus = JSON.stringify({
-    type: 'RELAY_STATUS',
-    connectorOnline: connectorSocket !== null && connectorSocket.readyState === WebSocket.OPEN,
-    esp32Online: connectorSocket !== null && connectorSocket.readyState === WebSocket.OPEN && esp32Online,
-    error: connectorSocket === null 
-      ? 'ESP32 connector offline' 
-      : (!esp32Online ? (esp32LastError || 'ESP32 unavailable') : null)
-  });
-  ws.send(initialStatus);
-
-  ws.on('message', (data, isBinary) => {
-    if (isBinary) {
-      // Binary MAVLink frame from Browser -> Forward to local connector -> ESP32
-      txBytesTotal += data.length;
-      if (connectorSocket && connectorSocket.readyState === WebSocket.OPEN) {
-        try {
-          connectorSocket.send(data, { binary: true });
-        } catch (err) {
-          console.error('[FORWARD ERROR] Failed to send to connector:', err);
-        }
-      }
-    }
-  });
-
-  ws.on('close', () => {
-    browserSockets.delete(ws);
-    console.log(`[BROWSER] Frontend client disconnected (Remaining: ${browserSockets.size})`);
-  });
-
-  ws.on('error', (err) => {
-    console.warn('[BROWSER ERROR]', err.message);
-    browserSockets.delete(ws);
-  });
-}
-
-// Keepalive heartbeat to prevent idle connection termination
+// Keepalive Ping Timer: 25 Seconds
+// Detects and terminates stale connections, logs heartbeat status
 setInterval(() => {
-  if (connectorSocket && connectorSocket.readyState === WebSocket.OPEN) {
+  lastHeartbeatTime = Date.now();
+  console.log(`[WS] Heartbeat check (Frontends: ${frontendSockets.size}, ESP32: ${esp32Sockets.size})`);
+
+  const allClients = [...frontendSockets, ...esp32Sockets];
+  for (const ws of allClients) {
+    if (ws.isAlive === false) {
+      console.warn(`[WS] Terminating unresponsive/stale connection (ID: ${ws.clientId}, Type: ${ws.clientType})`);
+      try { ws.terminate(); } catch (e) {}
+      frontendSockets.delete(ws);
+      esp32Sockets.delete(ws);
+      continue;
+    }
+
+    ws.isAlive = false;
     try {
-      connectorSocket.ping();
-    } catch (e) {}
-  }
-  for (const client of browserSockets) {
-    if (client.readyState === WebSocket.OPEN) {
-      try {
-        client.ping();
-      } catch (e) {}
+      ws.ping();
+    } catch (e) {
+      console.error(`[WS] Failed to send ping to ${ws.clientId}:`, e.message);
     }
   }
 }, 25000);
 
+// Start Server on PORT
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`=======================================================`);
-  console.log(`🚀 SAE INDIA SECURE WEBSOCKET RELAY RUNNING`);
-  console.log(`📡 Port:               ${PORT} (0.0.0.0)`);
-  console.log(`🔒 Token Auth:         ${RELAY_TOKEN ? 'ENABLED' : 'DISABLED'}`);
-  console.log(`🌐 Browser Endpoint:   /ws (e.g. wss://YOUR-DOMAIN/ws?token=...)`);
-  console.log(`🔌 Connector Endpoint: /connector`);
-  console.log(`❤️  Health Check:       http://localhost:${PORT}/health`);
+  console.log(`🚀 SAE INDIA SECURE WEBSOCKET CLOUD RELAY STARTED`);
+  console.log(`📡 Listening on:       0.0.0.0:${PORT}`);
+  console.log(`🌐 Primary WSS Route:  wss://saeindia-szj0.onrender.com/ws`);
+  console.log(`🔌 Legacy WSS Route:   wss://saeindia-szj0.onrender.com/connector`);
+  console.log(`❤️  Health Endpoint:   http://0.0.0.0:${PORT}/health`);
+  console.log(`🎯 Frontend Origin:    https://saeindiasphn.netlify.app`);
   console.log(`=======================================================`);
+});
+
+// Graceful Shutdown
+process.on('SIGTERM', () => {
+  console.log('[WS] SIGTERM received. Shutting down WebSocket relay gracefully...');
+  server.close(() => {
+    process.exit(0);
+  });
 });

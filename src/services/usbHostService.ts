@@ -109,6 +109,14 @@ class UsbHostService {
     return await transportManager.getEsp32Transport().checkEsp32Http(host, port);
   }
 
+  public async checkCloudServerHealth(): Promise<import('./transports/Esp32WebSocketTransport').CloudHealthResult> {
+    return await transportManager.getEsp32Transport().checkCloudServerHealth();
+  }
+
+  public sendRelayTestMessage(message?: string): boolean {
+    return transportManager.getEsp32Transport().sendTestMessage(message);
+  }
+
   public async requestUsbPermission(): Promise<boolean> {
     return await transportManager.requestUsbPermission();
   }

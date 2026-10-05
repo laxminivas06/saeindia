@@ -25,8 +25,8 @@ if (fs.existsSync(envPath)) {
 const ESP32_HOST = process.env.ESP32_HOST || '192.168.31.194';
 const ESP32_PORT = process.env.ESP32_PORT || '8080';
 const ESP32_PATH = process.env.ESP32_PATH || '/ws';
-const RELAY_URL = process.env.RELAY_URL || 'ws://localhost:8443/connector';
-const RELAY_TOKEN = process.env.RELAY_TOKEN || 'saeindia_secret_token_2026';
+const RELAY_URL = process.env.RELAY_URL || 'wss://saeindia-szj0.onrender.com/ws?client=esp32';
+const RELAY_TOKEN = process.env.RELAY_TOKEN || 'saeindia_sec_99348a7b1c0e';
 
 const cleanPath = ESP32_PATH.startsWith('/') ? ESP32_PATH : `/${ESP32_PATH}`;
 const esp32WsUrl = `ws://${ESP32_HOST}:${ESP32_PORT}${cleanPath}`;
@@ -65,6 +65,8 @@ function connectToRelay() {
 
     relaySocket.on('open', () => {
       console.log(`[RELAY] Connected to Cloud Relay ✓`);
+      // Register with explicit client type
+      relaySocket.send(JSON.stringify({ type: 'register', client: 'esp32', device_id: 'local-connector' }));
       // Report current ESP32 status to Relay
       reportEsp32Status(isEsp32Connected ? 'CONNECTED' : 'DISCONNECTED');
     });
@@ -81,6 +83,13 @@ function connectToRelay() {
             console.error('[FORWARD ERROR] Failed to send binary to ESP32:', e.message);
           }
         }
+      } else {
+        try {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === 'ping') {
+            relaySocket.send(JSON.stringify({ type: 'pong', timestamp: msg.timestamp || Date.now() }));
+          }
+        } catch (e) {}
       }
     });
 

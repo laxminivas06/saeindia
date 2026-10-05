@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { PixhawkConnectionState, ConnectionPhase } from '../../types/mavlink';
 import { mavlinkService } from '../../services/mavlinkService';
 import { transportManager } from '../../services/transports/TransportManager';
+import { RELAY_CONFIG } from '../../config/relayConfig';
 import {
   Usb,
   ShieldCheck,
@@ -116,11 +117,11 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
   const [esp32SecureEndpoint, setEsp32SecureEndpoint] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('esp32_secure_endpoint');
-      if (saved && saved.trim().length > 0 && !saved.includes('saeindia-relay.onrender.com')) {
+      if (saved && saved.trim().length > 0 && !saved.includes('saeindia-relay.onrender.com') && !saved.includes('/connector')) {
         return saved.trim();
       }
     }
-    return (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SECURE_RELAY_URL) || 'wss://saeindia-szj0.onrender.com/ws';
+    return (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SECURE_RELAY_URL) || RELAY_CONFIG.WS_URL;
   });
 
   // Secure Relay Token
@@ -129,8 +130,53 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
       const saved = localStorage.getItem('esp32_relay_token');
       if (saved && saved.trim().length > 0) return saved.trim();
     }
-    return (typeof import.meta !== 'undefined' && import.meta.env?.VITE_RELAY_TOKEN) || 'saeindia_sec_99348a7b1c0e';
+    return (typeof import.meta !== 'undefined' && import.meta.env?.VITE_RELAY_TOKEN) || RELAY_CONFIG.RELAY_TOKEN;
   });
+
+  // Cloud Health State (Independent verification of HTTPS /health)
+  const [cloudHealth, setCloudHealth] = useState<{
+    reachable: boolean;
+    status?: string;
+    service?: string;
+    websocket?: boolean;
+    esp32Online?: boolean;
+    frontendClientsCount?: number;
+    latencyMs?: number;
+    message?: string;
+  } | null>(null);
+  const [isCheckingCloudHealth, setIsCheckingCloudHealth] = useState(false);
+  const [testRelayStatus, setTestRelayStatus] = useState<string | null>(null);
+
+  // Poll cloud server health automatically
+  useEffect(() => {
+    handleCheckCloudHealth();
+    const timer = setInterval(() => {
+      handleCheckCloudHealth();
+    }, 25000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const handleCheckCloudHealth = async () => {
+    setIsCheckingCloudHealth(true);
+    try {
+      const res = await mavlinkService.checkCloudServerHealth();
+      setCloudHealth(res);
+    } catch (e: any) {
+      setCloudHealth({ reachable: false, message: e.message || 'Check failed' });
+    } finally {
+      setIsCheckingCloudHealth(false);
+    }
+  };
+
+  const handleSendTestMessage = () => {
+    const success = mavlinkService.sendRelayTestMessage(`Ping from Ground Station at ${new Date().toLocaleTimeString()}`);
+    if (success) {
+      setTestRelayStatus('Test message sent to Render relay ✓');
+    } else {
+      setTestRelayStatus('Failed: WebSocket connection not open');
+    }
+    setTimeout(() => setTestRelayStatus(null), 4000);
+  };
 
   // Mobile collapsed toggle
   const [isMobileCollapsed, setIsMobileCollapsed] = useState(false);
@@ -402,38 +448,52 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                   {isEsp32Mode ? 'ESP32-S3 WIRELESS MAVLINK' : isSimulated ? 'SITL BENCH SIMULATOR' : 'PIXHAWK USB OTG CONNECTION'}
                 </span>
                 
-                {/* Real-time Status Badge */}
+                {/* Real-time Status Badge (Requirement 10: Real WebSocket state) */}
                 <span className={`text-[10px] sm:text-[11px] font-black px-2 py-0.5 rounded-full border ${
-                  isConnected
+                  connectionMethod === 'ESP32'
+                    ? isConnected
+                      ? 'bg-emerald-950/90 text-emerald-300 border-emerald-500/60'
+                      : isWebSocketOpen
+                      ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/50'
+                      : linkState === 'CONNECTING'
+                      ? 'bg-amber-950/80 text-amber-300 border-amber-500/50 animate-pulse'
+                      : linkState === 'RECONNECTING'
+                      ? 'bg-amber-950/80 text-amber-300 border-amber-500/50 animate-pulse'
+                      : linkState === 'ERROR'
+                      ? 'bg-rose-950/80 text-rose-300 border-rose-500/50'
+                      : 'bg-slate-800 text-slate-400 border-slate-700'
+                    : isConnected
                     ? isSimulated
                       ? 'bg-purple-950/80 text-purple-300 border-purple-500/50'
-                      : connectionState.connectionType === 'ESP32_WEBSOCKET'
-                      ? 'bg-emerald-950/90 text-emerald-300 border-emerald-500/60 animate-pulse'
                       : 'bg-emerald-950/90 text-emerald-300 border-emerald-500/60'
                     : isWaitingMavlink
                     ? 'bg-amber-950/80 text-amber-300 border-amber-500/50 animate-pulse'
                     : isHeartbeatTimeout
                     ? 'bg-amber-950/80 text-amber-300 border-amber-500/50'
-                    : phase === 'PERMISSION_DENIED'
-                    ? 'bg-rose-950/80 text-rose-300 border-rose-500/50'
                     : isUsbConnected
                     ? 'bg-sky-950/80 text-sky-300 border-sky-500/50'
                     : 'bg-slate-800 text-slate-400 border-slate-700'
                 }`}>
-                  {isConnected
+                  {connectionMethod === 'ESP32'
+                    ? isConnected
+                      ? 'WSS CONNECTED • MAVLINK LOCKED ✓'
+                      : isWebSocketOpen
+                      ? 'WSS CONNECTED (WAITING MAVLINK)'
+                      : linkState === 'CONNECTING'
+                      ? 'WSS CONNECTING…'
+                      : linkState === 'RECONNECTING'
+                      ? 'WSS RECONNECTING…'
+                      : linkState === 'ERROR'
+                      ? 'WSS ERROR'
+                      : 'WSS DISCONNECTED'
+                    : isConnected
                     ? isSimulated
                       ? 'SIMULATED MAVLINK ✓'
-                      : connectionState.connectionType === 'ESP32_WEBSOCKET'
-                      ? 'MAVLINK CONNECTED ✓'
                       : 'PIXHAWK CONNECTED ✓'
                     : isWaitingMavlink
                     ? 'WAITING HEARTBEAT ⟳'
                     : isHeartbeatTimeout
                     ? 'HEARTBEAT TIMEOUT ⚠️'
-                    : isWebSocketOpen
-                    ? 'WEBSOCKET OPEN (WAITING)'
-                    : phase === 'PERMISSION_DENIED'
-                    ? 'PERMISSION DENIED'
                     : 'DISCONNECTED'}
                 </span>
 
@@ -980,6 +1040,213 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                       {esp32Host}:{esp32Port}{cleanPath}
                     </span>
                   </div>
+                </div>
+              )}
+            </div>
+
+            {/* ========================================================================= */}
+            {/* REQUIREMENT 11: PRODUCTION WSS & MAVLINK RELAY DIAGNOSTICS DECK           */}
+            {/* ========================================================================= */}
+            <div className="bg-slate-950/95 rounded-xl p-3 border-2 border-sky-500/40 space-y-3 shadow-lg">
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-800">
+                <div className="flex items-center space-x-2">
+                  <ShieldCheck className="w-4 h-4 text-sky-400" />
+                  <span className="font-black text-xs uppercase tracking-wide text-white">
+                    Live Relay &amp; Telemetry Diagnostics
+                  </span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={handleCheckCloudHealth}
+                    disabled={isCheckingCloudHealth}
+                    className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700 transition flex items-center space-x-1 cursor-pointer"
+                    title="Poll GET /health on Render Cloud Backend"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isCheckingCloudHealth ? 'animate-spin' : ''}`} />
+                    <span>Check /health</span>
+                  </button>
+                  <button
+                    onClick={handleSendTestMessage}
+                    disabled={!isWebSocketOpen}
+                    className={`px-2 py-0.5 rounded text-[10px] font-bold border transition flex items-center space-x-1 cursor-pointer ${
+                      isWebSocketOpen
+                        ? 'bg-sky-600/30 text-sky-300 border-sky-500/50 hover:bg-sky-600/50'
+                        : 'bg-slate-800 text-slate-500 border-slate-700 cursor-not-allowed'
+                    }`}
+                    title="Send a bi-directional WSS relay test frame"
+                  >
+                    <Zap className="w-3 h-3 text-amber-400" />
+                    <span>Send Relay Test</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Requirement 10 Details: Server, Protocol, Endpoint, Latency */}
+              <div className="bg-slate-900/90 rounded-lg p-2.5 border border-slate-800 grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] font-mono">
+                <div>
+                  <div className="text-slate-400 uppercase text-[9px]">Server</div>
+                  <div className="text-sky-300 font-bold truncate">saeindia-szj0.onrender.com</div>
+                </div>
+                <div>
+                  <div className="text-slate-400 uppercase text-[9px]">Protocol</div>
+                  <div className="text-emerald-400 font-bold">WSS (TLS 443)</div>
+                </div>
+                <div>
+                  <div className="text-slate-400 uppercase text-[9px]">Endpoint</div>
+                  <div className="text-purple-300 font-bold">/ws</div>
+                </div>
+                <div>
+                  <div className="text-slate-400 uppercase text-[9px]">Latency</div>
+                  <div className="text-cyan-300 font-bold">{latencyMs > 0 ? `${latencyMs} ms` : 'N/A'}</div>
+                </div>
+              </div>
+
+              {/* Requirement 11 6-Item Live Diagnostic Status Checklist */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[11px] font-mono">
+                {/* 1. Cloud Server */}
+                <div className={`p-2 rounded-lg border flex items-center justify-between ${
+                  cloudHealth?.reachable
+                    ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
+                    : 'bg-rose-950/40 border-rose-500/40 text-rose-300'
+                }`}>
+                  <span className="text-[10px] text-slate-300">Cloud Server</span>
+                  <span className="font-bold flex items-center space-x-1">
+                    {cloudHealth?.reachable ? (
+                      <>
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                        <span className="text-emerald-300 text-[10px]">HTTPS reachable ({cloudHealth.latencyMs}ms)</span>
+                      </>
+                    ) : (
+                      <>
+                        <XCircle className="w-3.5 h-3.5 text-rose-400" />
+                        <span className="text-rose-300 text-[10px]">Unreachable</span>
+                      </>
+                    )}
+                  </span>
+                </div>
+
+                {/* 2. WebSocket */}
+                <div className={`p-2 rounded-lg border flex items-center justify-between ${
+                  isWebSocketOpen
+                    ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
+                    : isConnecting
+                    ? 'bg-amber-950/40 border-amber-500/40 text-amber-200 animate-pulse'
+                    : 'bg-rose-950/40 border-rose-500/40 text-rose-300'
+                }`}>
+                  <span className="text-[10px] text-slate-300">WebSocket</span>
+                  <span className="font-bold flex items-center space-x-1">
+                    {isWebSocketOpen ? (
+                      <>
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                        <span className="text-emerald-300 text-[10px]">WSS connected</span>
+                      </>
+                    ) : isConnecting ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 text-amber-400 animate-spin" />
+                        <span className="text-amber-300 text-[10px]">Connecting…</span>
+                      </>
+                    ) : (
+                      <>
+                        <XCircle className="w-3.5 h-3.5 text-rose-400" />
+                        <span className="text-rose-300 text-[10px]">Disconnected</span>
+                      </>
+                    )}
+                  </span>
+                </div>
+
+                {/* 3. Relay */}
+                <div className={`p-2 rounded-lg border flex items-center justify-between ${
+                  isWebSocketOpen
+                    ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
+                    : 'bg-slate-900 border-slate-800 text-slate-400'
+                }`}>
+                  <span className="text-[10px] text-slate-300">Relay</span>
+                  <span className="font-bold flex items-center space-x-1">
+                    {isWebSocketOpen ? (
+                      <>
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                        <span className="text-emerald-300 text-[10px]">Relay active</span>
+                      </>
+                    ) : (
+                      <>
+                        <XCircle className="w-3.5 h-3.5 text-slate-500" />
+                        <span className="text-slate-400 text-[10px]">Inactive</span>
+                      </>
+                    )}
+                  </span>
+                </div>
+
+                {/* 4. ESP32 */}
+                <div className={`p-2 rounded-lg border flex items-center justify-between ${
+                  (isWebSocketOpen && (connectionState.esp32DeviceOnline || cloudHealth?.esp32Online))
+                    ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
+                    : 'bg-rose-950/30 border-rose-500/30 text-rose-300'
+                }`}>
+                  <span className="text-[10px] text-slate-300">ESP32</span>
+                  <span className="font-bold flex items-center space-x-1">
+                    {(isWebSocketOpen && (connectionState.esp32DeviceOnline || cloudHealth?.esp32Online)) ? (
+                      <>
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                        <span className="text-emerald-300 text-[10px]">Connected</span>
+                      </>
+                    ) : (
+                      <>
+                        <XCircle className="w-3.5 h-3.5 text-rose-400" />
+                        <span className="text-rose-300 text-[10px]">Disconnected</span>
+                      </>
+                    )}
+                  </span>
+                </div>
+
+                {/* 5. Pixhawk */}
+                <div className={`p-2 rounded-lg border flex items-center justify-between ${
+                  (isConnected && connectionState.isRealHardware)
+                    ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
+                    : 'bg-amber-950/30 border-amber-500/30 text-amber-300'
+                }`}>
+                  <span className="text-[10px] text-slate-300">Pixhawk</span>
+                  <span className="font-bold flex items-center space-x-1">
+                    {(isConnected && connectionState.isRealHardware) ? (
+                      <>
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                        <span className="text-emerald-300 text-[10px]">MAVLink detected</span>
+                      </>
+                    ) : (
+                      <>
+                        <XCircle className="w-3.5 h-3.5 text-amber-400" />
+                        <span className="text-amber-300 text-[10px]">Not detected</span>
+                      </>
+                    )}
+                  </span>
+                </div>
+
+                {/* 6. Telemetry */}
+                <div className={`p-2 rounded-lg border flex items-center justify-between ${
+                  (connectionState.bytesReceived > 0 && isConnected)
+                    ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
+                    : 'bg-slate-900 border-slate-800 text-slate-400'
+                }`}>
+                  <span className="text-[10px] text-slate-300">Telemetry</span>
+                  <span className="font-bold flex items-center space-x-1">
+                    {(connectionState.bytesReceived > 0 && isConnected) ? (
+                      <>
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                        <span className="text-emerald-300 text-[10px]">Receiving ({formatBytes(connectionState.bytesReceived)})</span>
+                      </>
+                    ) : (
+                      <>
+                        <XCircle className="w-3.5 h-3.5 text-slate-500" />
+                        <span className="text-slate-400 text-[10px]">No data</span>
+                      </>
+                    )}
+                  </span>
+                </div>
+              </div>
+
+              {testRelayStatus && (
+                <div className="p-2 rounded-lg bg-sky-950/60 border border-sky-500/40 text-sky-200 text-[10px] font-mono flex items-center space-x-1.5 animate-fadeIn">
+                  <Info className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                  <span>{testRelayStatus}</span>
                 </div>
               )}
             </div>

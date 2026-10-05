@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "start": "node relay-server/server.js",
-    "dev": "vite",
+    "server": "node relay-server/server.js",
+    "dev": "node -e \"if(process.env.RENDER){import('./relay-server/server.js')}else{import('child_process').then(cp=>cp.spawn('npx',['vite',...process.argv.slice(1)],{stdio:'inherit',shell:true}))}\"",
+    "dev:local": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "cap:sync": "cap sync",

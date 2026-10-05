@@ -49,8 +49,8 @@ const char* FALLBACK_PASS = "";
 // =====================================================================================
 const char* RELAY_HOST    = "saeindia-szj0.onrender.com";
 const uint16_t RELAY_PORT = 443;
-const char* RELAY_PATH    = "/connector?token=saeindia_sec_99348a7b1c0e";
-const char* RELAY_WSS_URL = "wss://saeindia-szj0.onrender.com/connector?token=saeindia_sec_99348a7b1c0e";
+const char* RELAY_PATH    = "/ws?client=esp32";
+const char* RELAY_WSS_URL = "wss://saeindia-szj0.onrender.com/ws?client=esp32";
 
 // Google Trust Services (GTS Root R4) Root CA used by Render.com
 const char RENDER_CA_CERT[] PROGMEM = 
@@ -172,7 +172,11 @@ void onMessageCallback(WebsocketsMessage message) {
     Serial.printf("📥 [PHONE -> PIXHAWK] Command received (%u bytes) -> Sent to TELEM2 (Total TX: %lu bytes)\n",
                   length, totalTxBytesToPixhawk);
   } else if (message.isText()) {
-    Serial.printf("ℹ️ [RELAY MESSAGE] %s\n", message.data().c_str());
+    String text = message.data();
+    Serial.printf("ℹ️ [RELAY MESSAGE] %s\n", text.c_str());
+    if (text.indexOf("\"ping\"") >= 0) {
+      wsClient.send("{\"type\":\"pong\",\"timestamp\":" + String(millis()) + "}");
+    }
   }
 }
 
@@ -185,7 +189,8 @@ void onEventsCallback(WebsocketsEvent event, String data) {
     Serial.println("*********************************************************\n");
     updateLED(2);
 
-    // Announce connection to relay server
+    // Announce connection to relay server with explicit client registration
+    wsClient.send("{\"type\":\"register\",\"client\":\"esp32\",\"device_id\":\"drone-01\"}");
     wsClient.send("{\"type\":\"ESP32_STATUS\",\"status\":\"CONNECTED\",\"device\":\"ESP32_S3_STANDALONE\"}");
   } else if (event == WebsocketsEvent::ConnectionClosed) {
     Serial.println("\n🔴 [WSS CLOUD RELAY] Connection closed. Will reconnect automatically...");

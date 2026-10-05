@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: saeindia-relay-server
+    name: saeindia-szj0
     runtime: node
     plan: free
     buildCommand: npm install
