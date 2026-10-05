@@ -61,7 +61,7 @@ const char* FALLBACK_PASS = "";
 const char* RELAY_HOST        = "saeindia-szj0.onrender.com";
 const uint16_t RELAY_PORT     = 443;
 const char* RELAY_PATH        = "/ws?client=esp32";
-const char* RELAY_WSS_URL     = "wss://saeindia-szj0.onrender.com/ws?client=esp32";
+const char* RELAY_WSS_URL     = "wss://saeindia-szj0.onrender.com:443/ws?client=esp32";
 
 // Local Relay (For offline field testing with laptop running 'npm run relay:start')
 const char* LOCAL_RELAY_IP    = "10.18.186.59";   // Laptop Wi-Fi IP
@@ -343,6 +343,10 @@ void connectToCloudRelay() {
   // Set insecure TLS so certificate expiration / NTP clock drift does not abort connection
   wsClient.setInsecure();
 
+  // Add explicit HTTP headers required by Cloudflare/Render edge
+  wsClient.addHeader("Host", RELAY_HOST);
+  wsClient.addHeader("Origin", "https://saeindia-szj0.onrender.com");
+
   bool ok = wsClient.connect(RELAY_WSS_URL);
   if (!ok) {
     // Fallback direct parameters
@@ -377,6 +381,7 @@ void sendCloudDiagnostics() {
   String json = "{";
   json += "\"type\":\"ESP32_DIAGNOSTICS\",";
   json += "\"wifi_connected\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") + ",";
+  json += "\"wifi_ssid\":\"" + String(WiFi.SSID()) + "\",";
   json += "\"wifi_rssi\":" + String(WiFi.RSSI()) + ",";
   json += "\"wifi_ip\":\"" + WiFi.localIP().toString() + "\",";
   json += "\"wss_connected\":" + String(wsClient.available() ? "true" : "false") + ",";
@@ -411,10 +416,11 @@ void printLiveDiagnostics() {
   Serial.println("╠═══════════════════════════════════════════════════════════════════════════════════╣");
 
   // State 1: Wi-Fi
-  Serial.printf("║ 📡 Wi-Fi:           %-20s  (IP: %-15s | RSSI: %d dBm)  ║\n",
+  String ssidStr = (WiFi.status() == WL_CONNECTED) ? String(WiFi.SSID()) : "NONE";
+  Serial.printf("║ 📡 Wi-Fi:           %-20s  (SSID: %-10s | IP: %-15s) ║\n",
                 WiFi.status() == WL_CONNECTED ? "CONNECTED ✓" : "DISCONNECTED ✗",
-                WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString().c_str() : "0.0.0.0",
-                WiFi.RSSI());
+                ssidStr.c_str(),
+                WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString().c_str() : "0.0.0.0");
 
   // State 2: WSS Cloud Relay
   Serial.printf("║ ☁️  Cloud Relay WSS: %-20s  (Host: %-28s) ║\n",

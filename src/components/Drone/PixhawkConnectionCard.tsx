@@ -62,13 +62,8 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
   const [showDevDetails, setShowDevDetails] = useState(false);
   const [selectedBaud, setSelectedBaud] = useState<number>(connectionState.baudRate || 57600);
   
-  // Wi-Fi Display State (managed directly on ESP32 web portal)
-  const [wifiSsid] = useState<string>(() => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('esp32_wifi_ssid') || 'DRONE_WIFI_2.4G';
-    }
-    return 'DRONE_WIFI_2.4G';
-  });
+  // Wi-Fi Display State (dynamically resolves from live telemetry, connectionState, or localStorage)
+  const wifiSsid = connectionState.wifiSsid || connectionState.esp32WifiSsid || (typeof window !== 'undefined' ? localStorage.getItem('esp32_wifi_ssid') : null) || 'drone123';
 
   // Connection Transport Method: 'ESP32' | 'USB' | 'SIM'
   const [connectionMethod, setConnectionMethod] = useState<'ESP32' | 'USB' | 'SIM'>(() => {
@@ -1293,7 +1288,7 @@ export const PixhawkConnectionCard: React.FC<PixhawkConnectionCardProps> = ({
                   <div>
                     <div className="text-[10px] text-slate-400 uppercase font-bold">Wi-Fi Network</div>
                     <div className="text-purple-300 font-bold truncate mt-0.5" title={wifiSsid || 'Default'}>
-                      {wifiSsid || 'DRONE_WIFI_2.4G'}
+                      {wifiSsid || 'drone123'}
                     </div>
                   </div>
                   <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase ${

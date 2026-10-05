@@ -99,7 +99,7 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
   private lastCloudHealth: CloudHealthResult = { reachable: false, message: 'Not checked yet' };
 
   // Wi-Fi State Persistence
-  private wifiSsid: string = 'DRONE_WIFI_2.4G';
+  private wifiSsid: string = 'drone123';
   private wifiConnected: boolean = true;
 
   private isConnecting: boolean = false;
@@ -697,6 +697,7 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
                 this.esp32WifiConnected = Boolean(msg.wifi_connected);
                 this.esp32WifiRssi = Number(msg.wifi_rssi) || 0;
                 this.esp32WifiIp = String(msg.wifi_ip || '');
+                if (msg.wifi_ssid) this.wifiSsid = String(msg.wifi_ssid);
                 this.esp32WssConnected = Boolean(msg.wss_connected);
                 this.esp32UartRxBytes = Number(msg.raw_uart_rx_bytes) || 0;
                 this.esp32UartTxBytes = Number(msg.raw_uart_tx_bytes) || 0;
@@ -726,6 +727,7 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
                   this.esp32WifiConnected = Boolean(d.wifi_connected);
                   this.esp32WifiRssi = Number(d.wifi_rssi) || 0;
                   this.esp32WifiIp = String(d.wifi_ip || '');
+                  if (d.wifi_ssid) this.wifiSsid = String(d.wifi_ssid);
                   this.esp32WssConnected = Boolean(d.wss_connected);
                   this.esp32UartRxBytes = Number(d.raw_uart_rx_bytes) || 0;
                   this.esp32UartTxBytes = Number(d.raw_uart_tx_bytes) || 0;
@@ -1079,4 +1081,5 @@ export class Esp32WebSocketTransport implements MavlinkTransport {
   public getEsp32MavlinkHeartbeats(): number { return this.esp32MavlinkHeartbeats; }
   public getEsp32MavlinkHeartbeatDetected(): boolean { return this.esp32MavlinkHeartbeatDetected; }
   public getEsp32DiagnosticCase(): string { return this.esp32DiagnosticCase; }
+  public getEsp32WifiSsid(): string { return this.wifiSsid; }
 }

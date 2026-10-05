@@ -183,6 +183,7 @@ export interface PixhawkConnectionState {
   esp32WifiConnected?: boolean;
   esp32WifiRssi?: number;
   esp32WifiIp?: string;
+  esp32WifiSsid?: string;
   esp32WssConnected?: boolean;
   esp32UartRxBytes?: number;
   esp32UartTxBytes?: number;

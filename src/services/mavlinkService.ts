@@ -371,6 +371,8 @@ class MAVLinkService {
       this.connectionState.esp32WifiConnected = esp32Transport.getEsp32WifiConnected();
       this.connectionState.esp32WifiRssi = esp32Transport.getEsp32WifiRssi();
       this.connectionState.esp32WifiIp = esp32Transport.getEsp32WifiIp();
+      this.connectionState.esp32WifiSsid = esp32Transport.getEsp32WifiSsid();
+      this.connectionState.wifiSsid = esp32Transport.getEsp32WifiSsid();
       this.connectionState.esp32WssConnected = esp32Transport.getEsp32WssConnected();
       this.connectionState.esp32UartRxBytes = esp32Transport.getEsp32UartRxBytes();
       this.connectionState.esp32UartTxBytes = esp32Transport.getEsp32UartTxBytes();
