@@ -418,7 +418,11 @@ void sendCloudDiagnostics() {
   json += "\"ws_rx_bytes\":" + String(ws_rx_bytes) + ",";
   json += "\"baud_rate\":" + String(PIXHAWK_BAUD) + ",";
   json += "\"diagnostic_case\":\"" + diagCase + "\"";
-  json +// =====================================================================================
+  json += "}";
+  wsClient.send(json);
+}
+
+// =====================================================================================
 // PERIODIC LIVE SERIAL MONITOR SUMMARY
 // =====================================================================================
 void printLiveDiagnostics() {
